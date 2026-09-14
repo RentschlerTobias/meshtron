@@ -5,15 +5,15 @@ import math
 
 def fourier_features(x, n_freqs=8):
     """
-    x: [B, N, 2]
+    x: [B, N, input_dim]
     Encodes each coordinate with sin/cos at 2^0 ... 2^(n_freqs-1) frequencies.
-    returns: [B, N, 2 + 4*n_freqs]
+    returns: [B, N, input_dim * (1 + 2*n_freqs)]
     """
     freqs = 2.0 ** torch.arange(n_freqs, device=x.device, dtype=x.dtype)  # [n_freqs]
-    x_freq = x.unsqueeze(-1) * freqs * math.pi  # [B, N, 2, n_freqs]
-    sin_feat = torch.sin(x_freq).flatten(-2)     # [B, N, 2*n_freqs]
-    cos_feat = torch.cos(x_freq).flatten(-2)     # [B, N, 2*n_freqs]
-    return torch.cat([x, sin_feat, cos_feat], dim=-1)  # [B, N, 2 + 4*n_freqs]
+    x_freq = x.unsqueeze(-1) * freqs * math.pi  # [B, N, input_dim, n_freqs]
+    sin_feat = torch.sin(x_freq).flatten(-2)     # [B, N, input_dim*n_freqs]
+    cos_feat = torch.cos(x_freq).flatten(-2)     # [B, N, input_dim*n_freqs]
+    return torch.cat([x, sin_feat, cos_feat], dim=-1)  # [B, N, input_dim*(1+2*n_freqs)]
 
 
 class PerceiverPointEncoder(nn.Module):
@@ -29,7 +29,14 @@ class PerceiverPointEncoder(nn.Module):
 
         self.n_freqs = n_freqs
         self.n_point_labels = n_point_labels
-        fourier_dim = input_dim + 4 * n_freqs  # z.B. 2 + 32 = 34
+        # Must match fourier_features()'s actual output width exactly: x itself
+        # (input_dim) + sin_feat (input_dim*n_freqs) + cos_feat (input_dim*n_freqs).
+        # `input_dim + 4*n_freqs` looks like the same thing but only coincides
+        # with this for input_dim=2 (the only value this ever ran with before
+        # dim=3 support existed) -- e.g. input_dim=3, n_freqs=8: 3+32=35 here
+        # vs the function's real 3*(1+16)=51, a silent shape-mismatch crash at
+        # the first forward() call. Compute it the same way the function does.
+        fourier_dim = input_dim * (1 + 2 * n_freqs)  # z.B. 2*(1+16) = 34
 
         self.latents = nn.Parameter(torch.randn(n_latents, d_model))
 

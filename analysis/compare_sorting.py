@@ -47,7 +47,7 @@ from trainer import Trainer
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base-config", type=Path,
-                   default=Path("compare_sorting_base.json"))
+                   default=Path(__file__).resolve().parent / "compare_sorting_base.json")
     p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2],
                    help="Seeds to sweep (default: 0 1 2). Ignored if --seed is set.")
     p.add_argument("--strategies", type=int, nargs="+", default=[1, 2],

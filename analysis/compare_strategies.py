@@ -33,7 +33,7 @@ from trainer import Trainer
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base-config", type=Path,
-                   default=Path("best_config.json"))
+                   default=Path(__file__).resolve().parent / "best_config.json")
     p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2],
                    help="Seeds to sweep (default: 0 1 2).")
     p.add_argument("--strategies", type=int, nargs="+", default=[0, 1, 2, 3],

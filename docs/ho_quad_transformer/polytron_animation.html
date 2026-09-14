@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Polytron — Mesh → Tokens → Modell → Tokens → Mesh</title>
+<style>
+  :root {
+    --v-color: #2563eb;   /* Stufe 1: Vertices */
+    --p-color: #d97706;   /* Stufe 2: Pointer/Faces */
+    --g-color: #059669;   /* Stufe 3: Geometrie */
+    --s-color: #6b7280;   /* Spezial-Tokens */
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .layout {
+    display: grid; grid-template-columns: 560px 1fr; gap: 20px; align-items: start;
+  }
+  .panel {
+    background: var(--panel); border-radius: 10px; padding: 16px;
+    border: 1px solid #334155;
+  }
+  svg { width: 100%; height: auto; background: #0b1220; border-radius: 8px; }
+  .vertex-dot { fill: #475569; stroke: #1e293b; stroke-width: 2; transition: fill .25s, r .25s; }
+  .vertex-dot.active { fill: var(--v-color); r: 10; }
+  .vertex-dot.done { fill: #64748b; }
+  .vertex-label { fill: #cbd5e1; font-size: 12px; font-family: monospace; pointer-events: none; }
+  .newidx-label { fill: var(--v-color); font-size: 11px; font-weight: bold; font-family: monospace; pointer-events: none; }
+  .face-poly { fill: rgba(217,119,6,0.08); stroke: #334155; stroke-width: 1.5; transition: fill .25s, stroke .25s; }
+  .face-poly.active { fill: rgba(217,119,6,0.28); stroke: var(--p-color); stroke-width: 2.5; }
+  .edge-line { stroke: #334155; stroke-width: 2; transition: stroke .25s, stroke-width .25s; }
+  .edge-line.active { stroke: var(--g-color); stroke-width: 4; }
+  .edge-arrow { fill: var(--g-color); opacity: 0; transition: opacity .25s; }
+  .edge-arrow.active { opacity: 1; }
+
+  .controls { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  button {
+    background: #334155; color: var(--text); border: 1px solid #475569;
+    border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: #475569; }
+  button.primary { background: var(--v-color); border-color: var(--v-color); }
+  button.primary:hover { background: #1d4ed8; }
+
+  .stage-badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+    font-weight: 600; margin-bottom: 8px;
+  }
+  .stage-badge.s1 { background: rgba(37,99,235,.2); color: var(--v-color); }
+  .stage-badge.s2 { background: rgba(217,119,6,.2); color: var(--p-color); }
+  .stage-badge.s3 { background: rgba(5,150,105,.2); color: var(--g-color); }
+  .stage-badge.s0 { background: rgba(107,114,128,.2); color: var(--s-color); }
+
+  .caption { font-size: 14px; line-height: 1.5; min-height: 60px; }
+  .caption b { color: #fff; }
+
+  .token-stream {
+    font-family: monospace; font-size: 12.5px; line-height: 1.9;
+    max-height: 420px; overflow-y: auto; background: #0b1220; border-radius: 8px;
+    padding: 12px; margin-top: 10px;
+  }
+  .tok {
+    display: inline-block; padding: 2px 6px; border-radius: 4px; margin: 2px;
+  }
+  .tok.v { background: rgba(37,99,235,.18); color: #93c5fd; }
+  .tok.p { background: rgba(217,119,6,.18); color: #fcd34d; }
+  .tok.g { background: rgba(5,150,105,.18); color: #6ee7b7; }
+  .tok.s { background: rgba(107,114,128,.25); color: #cbd5e1; font-weight: bold; }
+
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  .progress { height: 4px; background: #334155; border-radius: 2px; margin-top: 14px; overflow: hidden; }
+  .progress-bar { height: 100%; background: var(--v-color); width: 0%; transition: width .25s; }
+</style>
+</head>
+<body>
+
+<h1>Polytron: Mesh → Tokens → Modell → Tokens → Mesh</h1>
+<p class="sub">Beispiel-Mesh aus dem PolyGen-Walkthrough (07_polygen_walkthrough.md): 2 Quads mit geteilter Kante. Sortierung und Quantisierung werden live berechnet, nicht hartkodiert.</p>
+
+<div class="layout">
+  <div class="panel">
+    <svg id="canvas" viewBox="0 0 520 400"></svg>
+    <div class="legend">
+      <span><i style="background:var(--v-color)"></i> Stufe 1: Vertices (autoregressiv)</span>
+      <span><i style="background:var(--p-color)"></i> Stufe 2: Faces/Pointer (autoregressiv)</span>
+      <span><i style="background:var(--g-color)"></i> Stufe 3: Geometrie (parallel)</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div id="stageBadge" class="stage-badge s0">START</div>
+    <div id="caption" class="caption">Bereit. Klick "Play" oder "Schritt →".</div>
+
+    <div class="controls">
+      <button id="btnReset">⟲ Reset</button>
+      <button id="btnBack">← Zurück</button>
+      <button id="btnStep" class="primary">Schritt →</button>
+      <button id="btnPlay" class="primary">▶ Play</button>
+    </div>
+
+    <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+
+    <div id="tokenStream" class="token-stream"></div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------
+// 1) Geometrie: dasselbe Beispiel-Mesh wie im 07-Walkthrough-Dokument
+// ---------------------------------------------------------------
+const rawVerts = [
+  {old:0, x:1, y:1}, {old:1, x:2, y:1}, {old:2, x:2, y:2},
+  {old:3, x:1, y:2}, {old:4, x:3, y:1}, {old:5, x:3, y:2},
+];
+rawVerts.forEach(v => {
+  v.r = Math.hypot(v.x, v.y);
+  v.theta = Math.atan2(v.y, v.x);
+  v.sx = 60 + (v.x - 1) * 180;
+  v.sy = 320 - (v.y - 1) * 180;
+});
+const facesOld = [[0,1,2,3],[1,4,5,2]]; // alte Indizes, Face-Traversal-Reihenfolge
+
+// Stufe 1: lexikografisch nach (theta, r) sortieren -> order[newPos] = oldIdx
+const order = rawVerts.map((v,i)=>i).slice().sort((a,b) =>
+  rawVerts[a].theta - rawVerts[b].theta || rawVerts[a].r - rawVerts[b].r);
+const old2new = new Array(rawVerts.length);
+order.forEach((oldIdx, newPos) => old2new[oldIdx] = newPos);
+
+// Quantisierung wie in prototype_twostage.py (Beispiel-Bounds Qr=512,Qa=256,R_MIN=0,R_MAX=4)
+const Qr = 512, Qa = 256, R_MIN = 0, R_MAX = 4;
+function qScalar(v, vmin, vmax) { return Math.round((v - vmin) / (vmax - vmin) * (Qr - 1)); }
+function qAngle(theta) {
+  const s = (Math.sin(theta) + 1) / 2, c = (Math.cos(theta) + 1) / 2;
+  return [Math.round(s * (Qa - 1)), Math.round(c * (Qa - 1))];
+}
+
+// ---------------------------------------------------------------
+// 2) SVG aufbauen
+// ---------------------------------------------------------------
+const svg = document.getElementById('canvas');
+function el(tag, attrs) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// Face-Polygone (unter den Kanten)
+const facePolys = facesOld.map(f => {
+  const pts = f.map(i => `${rawVerts[i].sx},${rawVerts[i].sy}`).join(' ');
+  const poly = el('polygon', {points: pts, class: 'face-poly'});
+  svg.appendChild(poly);
+  return poly;
+});
+
+// Kanten (Half-Edges), pro Face 4, in Traversal-Reihenfolge
+const edgeEls = [];
+facesOld.forEach((f, fi) => {
+  for (let k = 0; k < 4; k++) {
+    const p0 = f[k], p1 = f[(k+1)%4];
+    const a = rawVerts[p0], b = rawVerts[p1];
+    const line = el('line', {x1:a.sx, y1:a.sy, x2:b.sx, y2:b.sy, class:'edge-line'});
+    svg.appendChild(line);
+    edgeEls.push({p0, p1, fi, k, el: line});
+  }
+});
+
+// Vertex-Punkte + Labels
+const vertexEls = rawVerts.map(v => {
+  const dot = el('circle', {cx:v.sx, cy:v.sy, r:7, class:'vertex-dot'});
+  const label = el('text', {x:v.sx+12, y:v.sy-10, class:'vertex-label'});
+  label.textContent = `old${v.old}`;
+  const newLabel = el('text', {x:v.sx+12, y:v.sy+18, class:'newidx-label'});
+  newLabel.textContent = '';
+  svg.appendChild(dot); svg.appendChild(label); svg.appendChild(newLabel);
+  return {dot, label, newLabel, v};
+});
+
+// ---------------------------------------------------------------
+// 3) Schritt-Liste bauen (Stufe 1 -> sep -> Stufe 2 -> sep2 -> Stufe 3 -> end)
+// ---------------------------------------------------------------
+const steps = [];
+
+steps.push({stage:'s0', caption:'<b>Ausgangs-Mesh</b>: 6 Vertices (alte Indizes), 2 Faces, eine geteilte Kante zwischen ihnen.', tokens:[]});
+steps.push({stage:'s0', caption:'<b>[start]</b> Token — Beginn der Sequenz.', tokens:[{t:'start', c:'s'}]});
+
+order.forEach((oldIdx, newPos) => {
+  const v = rawVerts[oldIdx];
+  const rTok = qScalar(v.r, R_MIN, R_MAX);
+  const [sTok, cTok] = qAngle(v.theta);
+  steps.push({
+    stage: 's1',
+    caption: `<b>Stufe 1 — Vertex ${newPos+1}/6:</b> old${oldIdx} (r=${v.r.toFixed(2)}, θ=${(v.theta*180/Math.PI).toFixed(1)}°) `
+            + `ist an sortierter Position ${newPos} (lexsort nach θ, dann r). `
+            + `Autoregressiv, EIN Token nach dem anderen.`,
+    highlightVertex: oldIdx,
+    setNewIdx: {oldIdx, newPos},
+    tokens: [
+      {t:`r=${rTok}`, c:'v'}, {t:`sin=${sTok}`, c:'v'}, {t:`cos=${cTok}`, c:'v'}
+    ]
+  });
+});
+
+steps.push({stage:'s0', caption:'<b>[sep]</b> Token — Stufe 1 fertig, Stufe 2 beginnt.', tokens:[{t:'sep', c:'s'}]});
+
+facesOld.forEach((f, fi) => {
+  const ptrTokens = f.map(oldIdx => old2new[oldIdx]);
+  steps.push({
+    stage: 's2',
+    caption: `<b>Stufe 2 — Face ${fi === 0 ? 'A' : 'B'}:</b> 4 Zeiger auf die Stufe-1-Vertexliste `
+            + `(new-Indizes [${ptrTokens.join(',')}]). Autoregressiv, aber jeder Zeiger ist ein `
+            + `softmax über die EXISTIERENDEN Vertices — kein ungültiger Index möglich.`,
+    highlightFace: fi,
+    tokens: ptrTokens.map(idx => ({t:`ptr=${idx}`, c:'p'}))
+  });
+});
+
+steps.push({stage:'s0', caption:'<b>[sep2]</b> Token — Stufe 2 fertig, Stufe 3 beginnt.', tokens:[{t:'sep2', c:'s'}]});
+
+// Stufe 3: alle Half-Edges GLEICHZEITIG (ein Schritt, ein Forward-Pass)
+{
+  const allEdges = edgeEls;
+  const geomTokens = [];
+  allEdges.forEach(e => {
+    // keine echten Streamline-Daten in diesem synthetischen Beispiel -> Fallback Gerade
+    geomTokens.push({t:`s1=.33`, c:'g'}, {t:`h1=.00`, c:'g'}, {t:`s2=.67`, c:'g'}, {t:`h2=.00`, c:'g'});
+  });
+  steps.push({
+    stage: 's3',
+    caption: `<b>Stufe 3 — Geometrie, EIN Forward-Pass für ALLE 8 Half-Edges gleichzeitig</b> `
+            + `(NICHT autoregressiv — Topologie ist schon bekannt). Keine echten Streamline-Daten in `
+            + `diesem synthetischen Beispiel → Fallback auf die Gerade (s1=⅓, h1=0, s2=⅔, h2=0), `
+            + `derselbe Pfad wie bei echten fehlenden Kanten im Datensatz.`,
+    highlightAllEdges: true,
+    tokens: geomTokens
+  });
+}
+
+steps.push({stage:'s0', caption:'<b>[end]</b> Token — Sequenz komplett. Detokenize kann jetzt das Mesh rekonstruieren.', tokens:[{t:'end', c:'s'}]});
+steps.push({stage:'s0', caption:'<b>Fertig.</b> Stufe 1 lieferte Vertices, Stufe 2 gültige Faces per Konstruktion, Stufe 3 die Kantengeometrie — alles aus einer einzigen Token-Sequenz.', tokens:[]});
+
+// ---------------------------------------------------------------
+// 4) Player-Logik
+// ---------------------------------------------------------------
+let cur = -1;
+let playing = false;
+let timer = null;
+
+const captionEl = document.getElementById('caption');
+const badgeEl = document.getElementById('stageBadge');
+const streamEl = document.getElementById('tokenStream');
+const progressEl = document.getElementById('progressBar');
+
+function resetVisuals() {
+  vertexEls.forEach(ve => { ve.dot.classList.remove('active','done'); ve.newLabel.textContent=''; });
+  facePolys.forEach(p => p.classList.remove('active'));
+  edgeEls.forEach(e => e.el.classList.remove('active'));
+}
+
+function render() {
+  resetVisuals();
+  streamEl.innerHTML = '';
+  let stageLabel = 'START';
+
+  for (let i = 0; i <= cur; i++) {
+    const s = steps[i];
+    if (s.stage !== 's0') stageLabel = s.stage.toUpperCase();
+
+    if (s.highlightVertex !== undefined) {
+      vertexEls[s.highlightVertex].dot.classList.add(i === cur ? 'active' : 'done');
+    }
+    if (s.setNewIdx) {
+      vertexEls[s.setNewIdx.oldIdx].newLabel.textContent = `new${s.setNewIdx.newPos}`;
+    }
+    if (s.highlightFace !== undefined && i === cur) {
+      facePolys[s.highlightFace].classList.add('active');
+    }
+    if (s.highlightAllEdges && i === cur) {
+      edgeEls.forEach(e => e.el.classList.add('active'));
+    }
+    s.tokens.forEach(tok => {
+      const span = document.createElement('span');
+      span.className = 'tok ' + tok.c;
+      span.textContent = tok.t;
+      streamEl.appendChild(span);
+    });
+  }
+  streamEl.scrollTop = streamEl.scrollHeight;
+
+  const s = cur >= 0 ? steps[cur] : null;
+  badgeEl.className = 'stage-badge ' + (s ? s.stage : 's0');
+  badgeEl.textContent = s ? ({s0:'SPEZIAL', s1:'STUFE 1 — VERTICES', s2:'STUFE 2 — FACES/POINTER', s3:'STUFE 3 — GEOMETRIE'}[s.stage]) : 'START';
+  captionEl.innerHTML = s ? s.caption : 'Bereit. Klick "Play" oder "Schritt →".';
+  progressEl.style.width = `${Math.max(0,(cur+1))/steps.length*100}%`;
+}
+
+function step() {
+  if (cur < steps.length - 1) { cur++; render(); }
+  else { pause(); }
+}
+function back() { if (cur > -1) { cur--; render(); } }
+function reset() { pause(); cur = -1; render(); }
+function play() {
+  if (playing) return;
+  playing = true;
+  document.getElementById('btnPlay').textContent = '⏸ Pause';
+  timer = setInterval(() => {
+    if (cur >= steps.length - 1) { pause(); return; }
+    step();
+  }, 900);
+}
+function pause() {
+  playing = false;
+  document.getElementById('btnPlay').textContent = '▶ Play';
+  clearInterval(timer);
+}
+
+document.getElementById('btnStep').onclick = () => { pause(); step(); };
+document.getElementById('btnBack').onclick = () => { pause(); back(); };
+document.getElementById('btnReset').onclick = reset;
+document.getElementById('btnPlay').onclick = () => playing ? pause() : play();
+
+render();
+</script>
+</body>
+</html>

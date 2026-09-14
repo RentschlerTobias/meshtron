@@ -22,6 +22,7 @@ Es existiert **bereits** ein passendes Modell (`MeshtronDomain`) und es **wurde 
 | [04_rating_and_roadmap.md](04_rating_and_roadmap.md) | Rating-Matrix, Ranking, Roadmap, Nächstschritte |
 | [05_face_block_generator.md](05_face_block_generator.md) | Fokus-Konzept Plan B: **Quad-Faces per Pointer-Modell** aus Punktwolke + FaceCount, aufgesetzt auf realen Code |
 | [06_edge_geometry_study.md](06_edge_geometry_study.md) | **Kantengeometrie (Stufe 3):** Vergleich `hermite` / `bezier` k=2 / `cubic_bezier`, Daten-Befund (0 Wendepunkte über 330k Kanten), Empfehlung `cubic_bezier` (4 Tok, median 0.7 %) |
+| [07_polygen_walkthrough.md](07_polygen_walkthrough.md) | **PolyGen Schritt-für-Schritt:** Mesh→Tokens→Modell→Tokens→Mesh an einem durchgerechneten Mini-Beispiel (ASCII/Mermaid), inkl. Literaturliste |
 
 ## Empfehlung (Kurzfassung)
 

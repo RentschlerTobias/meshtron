@@ -4,38 +4,67 @@ Autoregressive transformer for 2D quadrilateral mesh generation. Conditioned on 
 
 ## What lives here
 
-Three model families coexist in this repository. They are independent — Plan B
-does not replace the earlier two, and none of them import each other's training
-code. Pick the entry point for the one you want:
+"Meshtron" is the umbrella project name. Two model families are actively
+maintained here, independent of each other (neither imports the other's
+training code):
 
 | Family | Entry point | What it does | Selector |
 |---|---|---|---|
-| **Meshtron** (2D quads) | `train.py` | Point cloud + face count -> flat quad-token sequence | `--sorting-strategy {0,1,2,3}` |
-| **MeshtronDomain** (block partition) | `train_domain.py` | Domain partition with curved edges, polar `(r, theta)` tokens | `DomainTrainingConfig.sorting_strategy {0,1,2}`, `embedding_mode {0,1,2}` |
-| **Plan B** (two-stage) | `chain_e2e.py` | Topology split from geometry: S1 vertices -> S2 pointer faces -> S3 HO geometry | `--ep1/--ep2/--ep3`, `--load-s1`, `--init` |
+| **Quadtron** (2D/3D quads) | `train.py` | Point cloud + face count -> flat quad-token sequence, row-encoded | `--sorting-strategy {0,1,2,3}` |
+| **Polytron** (two-stage) | `polytron_chain.py` | Topology split from geometry: S1 vertices -> S2 pointer faces -> S3 HO geometry | `--ep1/--ep2/--ep3`, `--load-s1`, `--init` |
 
-Plan B is deliberately standalone: `prototype_twostage.py` and the three
-`*_head_prototype.py` modules do not touch the production tokenizer classes, so
-the earlier pipelines keep working unchanged.
+Polytron is deliberately standalone: `polytron_tokenizer.py` and the
+`polytron_*_model.py` heads do not touch Quadtron's tokenizer classes, so the
+two pipelines keep working unchanged independently.
+
+**MeshtronDomain** (`meshtron_domain.py`, `tokenizer_domain.py`,
+`train_domain.py`, `domain_trainer.py`, `dataset_domain.py`,
+`inference_domain.py`, `domain_embedding.py`, and the `plot_domain_*.py`
+scripts) is **deprecated**: a failed experiment (severe overfitting, invalid
+generated output — see
+`docs/ho_quad_transformer/01_current_model_and_diagnosis.md`) that motivated
+building Polytron as the structural fix. Kept in the repo for reference, not
+maintained or extended; each of those files carries a `DEPRECATED` note at the
+top.
+
+Both families are 2D+3D, one config (`PipelineConfig`, `config.py`) — see
+`docs/decisions/2026-09-13-meshtron-refactor-plan.md` for the full rationale,
+what was found/fixed along the way, and known gaps.
 
 ## Running
 
-No package build. Run scripts directly:
+No package build. Run scripts directly.
+
+**TUI** (`tui.py`, needs `textual` — `uv sync`): pick model family/dimension,
+edit the config fields that matter day to day, pick a dataset file, save/load
+config as JSON, start training with a live log pane.
 
 ```bash
-# Meshtron -- the original 2D quad pipeline
-python train.py                 # train with TrainingConfig defaults
-python train.py --config x.json # train from a JSON config (CLI flags override fields)
-python train.py --sorting-strategy 2
+python tui.py
+```
+
+**CLI:**
+
+```bash
+# train.py is the single entry point for BOTH families, 2D and 3D:
+python train.py --model-family quadtron --dim 2                  # defaults
+python train.py --model-family quadtron --dim 3 --data-path quadtron_data_3d.pt
+python train.py --model-family polytron --dim 3 --corners-per-block 8 \
+    --data-path polytron_data_3d.pt
+python train.py --config x.json                                  # CLI flags override fields
+python train.py --model-family quadtron --sorting-strategy 2 \
+    --use-flash-attention --sliding-window-size 512
+python train.py --model-family quadtron --rl-enabled \
+    --init-checkpoint runs/<hash>/best.pt --rl-curriculum-stage mesh
+
 python validation.py            # inspect checkpoints and plot training history
 
-# MeshtronDomain -- block partition on domain data
-python train_domain.py
-python inference_domain.py
+# polytron_chain.py also still works standalone (same flags as before):
+python polytron_chain.py --ep1 20 --ep2 25 --ep3 25
+python polytron_chain.py --dim 3 --corners-per-block 8 --load-s1 <checkpoint>
 
-# Plan B -- two-stage chain, end to end
-python chain_e2e.py --ep1 20 --ep2 25 --ep3 25
-python chain_e2e.py --load-s1 <checkpoint>   # reuse a pretrained stage 1
+# domain_extractor_3d.py: sample.npz (tistos) -> quadtron_data_3d.pt / polytron_data_3d.pt
+python domain_extractor_3d.py --src ../domain_partition_3D/data/tistos_domain_partition
 ```
 
 Dependencies are pinned in `pyproject.toml` (uv, CUDA 12.8 wheels): `uv sync`.
@@ -50,9 +79,10 @@ and the entry points expect the files next to the scripts:
 | File | Used by | Config field |
 |---|---|---|
 | `centered_blades_cleaned.pt` | `train.py` | `TrainingConfig.data_path` |
-| `domain_data_10k.pt` | `train_domain.py` | `DomainTrainingConfig.data_path` |
-| `domain_data_aug.pt` | `chain_e2e.py` | `--data` |
+| `domain_data_aug.pt` | `polytron_chain.py` | `--data` |
 | `meta_mesh.pt` | `testing.py` | -- |
+
+(`domain_data_10k.pt` / `train_domain.py` was MeshtronDomain-only; deprecated, see above.)
 
 Point `--data-path` at wherever you keep them, or drop them into the working
 directory before starting a run.
@@ -63,14 +93,14 @@ directory before starting a run.
 - `config.py` — `TrainingConfig` dataclass: single source of truth for all hyperparameters; hashable, JSON-serializable.
 - `reproducibility.py` — `set_seed`, DataLoader generator and worker init for deterministic runs.
 - `metrics.py` — `TokenLossAccumulator` and `EpochMetrics`. Computes NLL, bits-per-token and perplexity weighted by valid (non-pad) tokens, so values are comparable across batch sizes and sequence lengths.
-- `policy.py` — `Policy` wrapper around `Meshtron`. `logits()` for teacher forcing today, `sample()` is in place for a future RL phase.
+- `policy.py` — `Policy` wrapper around `Quadtron`. `logits()` for teacher forcing today, `sample()` is in place for a future RL phase.
 - `objectives.py` — `Objective` ABC + `TeacherForcingObjective` (cross-entropy, sum-reduction, pad-ignored). Returns `(loss, loss_sum, n_tokens)` so the per-step gradient is on per-token scale while logging stays unbiased.
 - `logger.py` — `JSONLLogger`. Per run: `runs/<config-hash>/{config.json, metrics.jsonl, result.json}`.
 - `trainer.py` — `Trainer(cfg).run() -> RunResult`. Linear warmup + cosine schedule, bf16/fp16 autocast, correct gradient accumulation, opt-in checkpointing.
 - `train.py` — CLI entry point. Builds `TrainingConfig` from defaults / JSON / flags and calls `Trainer.run()`.
 
 ### Model
-- `meshtron.py` — `Meshtron` model: token embedding + point encoder + face-count encoder, fed into the transformer with causal self-attention and cross-attention to the latent condition.
+- `quadtron.py` — `Quadtron` model: token embedding + point encoder + face-count encoder, fed into the transformer with causal self-attention and cross-attention to the latent condition.
 - `hourglass_transformer.py` — currently a flat transformer (despite the historical name): each stage runs at full sequence length, followed by cross-attention conditioning. No shortening / upsampling, so no information leaks through downsampling.
 - `attention.py`, `positional_encoder.py` — multi-head attention with RoPE; `is_causal` flag controls masking.
 - `point_encoder.py` — `PerceiverPointEncoder`: cross-attention over sampled boundary + interior points to a fixed-size latent set, with Fourier features and pre-norm.
@@ -89,8 +119,8 @@ directory before starting a run.
   | `2` | adjacent rows | row-compressed |
   | `3` | adjacent rows, left-to-right | row-compressed |
 
-- `tokenizer_domain.py` — tokenizer for the domain-partition family. Independent `sorting_strategy` axis: `0` = no compression, `1` = row-compressed, `2` = vertex-first, combined with `embedding_mode` (`0` split vocab, `1` shared, `2` separate).
-- `prototype_twostage.py` — `TwoStageTokenizer` for Plan B. Emits unique block corners once as quantized `(r, theta)`, then each quad as four pointers into that vertex list, so face validity holds by construction.
+- `tokenizer_domain.py` — **deprecated**, MeshtronDomain-only. Independent `sorting_strategy` axis: `0` = no compression, `1` = row-compressed, `2` = vertex-first, combined with `embedding_mode` (`0` split vocab, `1` shared, `2` separate).
+- `polytron_tokenizer.py` — `PolytronTokenizer` for Polytron. Emits unique block corners once as quantized `(r, theta)`, then each quad as four pointers into that vertex list, so face validity holds by construction.
 - `dataset.py` — `MeshData`. Tokenizes meshes, samples a fixed-size point cloud (boundary first, then interior, with noise replication if interior is small), and produces shifted `(input_tokens, target_tokens)` pairs for next-token prediction.
 
 ## Loss and metrics
@@ -122,7 +152,7 @@ The config hash is a deterministic 8-char digest of all fields, so identical con
 
 ## Conventions
 
-- All hyperparameters live in `TrainingConfig`. Don't hardcode them inside `Trainer`, `Meshtron` or sweeps.
+- All hyperparameters live in `TrainingConfig`. Don't hardcode them inside `Trainer`, `Quadtron` or sweeps.
 - Don't average per-batch loss values across batches; use `TokenLossAccumulator`.
 - New training objectives plug in by implementing `Objective.compute(batch, policy) -> ObjectiveOutput`. The trainer is objective-agnostic.
 - Checkpointing is off by default; turn on explicitly per run via `--save-best` / `--save-last`.

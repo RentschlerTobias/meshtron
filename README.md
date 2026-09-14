@@ -75,18 +75,23 @@ it, not the training paths: `uv sync --extra mesh`.
 ## Datasets
 
 Datasets are **not** stored in this repository. `.gitignore` excludes `*.pt`,
-and the entry points expect the files next to the scripts:
+and `train.py`/`tui.py` expect them in `data/`:
 
 | File | Used by | Config field |
 |---|---|---|
-| `centered_blades_cleaned.pt` | `train.py` | `TrainingConfig.data_path` |
-| `domain_data_aug.pt` | `polytron_chain.py` | `--data` |
-| `meta_mesh.pt` | `testing.py` | -- |
+| `data/centered_blades_cleaned.pt` | `train.py` (Quadtron 2D) | `PipelineConfig.data_path` |
+| `data/quadtron_data_3d.pt` | `train.py` (Quadtron 3D) | `PipelineConfig.data_path` |
+| `data/polytron_data_3d.pt` | `train.py` (Polytron 3D) | `PipelineConfig.data_path` |
+| `data/domain_data_aug.pt` | `polytron_chain.py` standalone | `--data` |
+| `data/meta_mesh.pt` | `testing.py` | -- |
 
 (`domain_data_10k.pt` / `deprecated/train_domain.py` was MeshtronDomain-only; deprecated, see above.)
 
-Point `--data-path` at wherever you keep them, or drop them into the working
-directory before starting a run.
+Point `--data-path` at wherever you keep them, or drop them into `data/`
+before starting a run. `polytron_chain.py`'s own standalone `--data` flag and
+the other analysis/viz scripts under `analysis/`/`viz/` still default to a
+plain filename next to wherever you run them from -- pass an explicit path if
+you keep your datasets in `data/`.
 
 ## Directory layout
 

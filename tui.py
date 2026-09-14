@@ -42,9 +42,9 @@ from config import PipelineConfig
 
 
 def _discover_datasets() -> list[str]:
-    """*.pt files in the working directory, most-recently-modified first --
-    same "drop it next to the scripts" convention the README documents."""
-    here = Path(".")
+    """*.pt files in data/, most-recently-modified first -- same convention
+    the README documents."""
+    here = Path("data")
     files = sorted(here.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
     return [str(p) for p in files]
 

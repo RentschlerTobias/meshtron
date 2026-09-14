@@ -21,7 +21,7 @@ class PipelineConfig:
     dim: int = 2                     # 2 | 3
 
     # Daten
-    data_path: str = "./centered_blades_cleaned.pt"
+    data_path: str = "./data/centered_blades_cleaned.pt"
     train_val_ratio: float = 0.8
     sorting_strategy: int = 1        # Quadtron: _order_quads strategy (0-3)
     quantization: int = 256
@@ -107,7 +107,7 @@ class DomainTrainingConfig:
     """Konfiguration für Domain-Partition Training."""
 
     # Daten
-    data_path: str = "./domain_data_10k.pt"
+    data_path: str = "./data/domain_data_10k.pt"
     train_val_ratio: float = 0.8
     sorting_strategy: int = 0       # 0=no compression, 1=row-compressed, 2=vertex-first
     embedding_mode: int = 0          # 0=split vocab, 1=shared, 2=separate

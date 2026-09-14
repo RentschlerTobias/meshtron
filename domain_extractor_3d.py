@@ -167,8 +167,8 @@ def main():
     ap.add_argument('--src', type=Path,
                     default=Path('../domain_partition_3D/data/tistos_domain_partition'),
                     help='Directory containing one subfolder per sample (each with sample.npz).')
-    ap.add_argument('--out-quadtron', type=Path, default=Path('quadtron_data_3d.pt'))
-    ap.add_argument('--out-polytron', type=Path, default=Path('polytron_data_3d.pt'))
+    ap.add_argument('--out-quadtron', type=Path, default=Path('data/quadtron_data_3d.pt'))
+    ap.add_argument('--out-polytron', type=Path, default=Path('data/polytron_data_3d.pt'))
     ap.add_argument('--max-tri-points', type=int, default=768,
                     help="Cap on Polytron's tri_coordinates point count (its VertexGen "
                          "runs full self-attention over this with no subsampling of its "
@@ -194,6 +194,8 @@ def main():
     print(f"\nExtracted {len(quadtron_samples)}/{len(sample_paths)} samples "
           f"({n_failed} failed/skipped).")
 
+    args.out_quadtron.parent.mkdir(parents=True, exist_ok=True)
+    args.out_polytron.parent.mkdir(parents=True, exist_ok=True)
     torch.save(quadtron_samples, args.out_quadtron)
     torch.save(polytron_samples, args.out_polytron)
     print(f"Wrote {args.out_quadtron} ({len(quadtron_samples)} samples)")

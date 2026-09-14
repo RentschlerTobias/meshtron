@@ -1,9 +1,9 @@
 """
-pointer_head_prototype.py
+polytron_pointer_model.py
 
 Machbarkeitsnachweis fuer den POINTER-KOPF der Stufe 2 (Faces als Zeiger),
 siehe docs/ho_quad_transformer/05_face_block_generator.md und die Erklaerung in
-prototype_twostage.py (Stufe 1 = eindeutige Vertices, Stufe 2 = Faces als 4 Zeiger).
+polytron_tokenizer.py (Stufe 1 = eindeutige Vertices, Stufe 2 = Faces als 4 Zeiger).
 
 Problem, das der Pointer-Kopf loest
 ------------------------------------
@@ -46,15 +46,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from prototype_twostage import TwoStageTokenizer
+from polytron_tokenizer import PolytronTokenizer
 
 
 # ------------------------------------------------------------------
 # Daten: aus dem Zwei-Stufen-Tokenizer die (Vertex-Features, Zeiger-Ziele) ziehen
 # ------------------------------------------------------------------
 def build_examples(data, tok, n_max=None):
-    """Pro Mesh: vert_feats [M,3] (r, sin th, cos th, in SORTIERTER new-Reihenfolge)
-    und ptr_targets [4F] (Face-Zeiger auf new-Indizes, Face-Traversal-Reihenfolge)."""
+    """Pro Mesh: vert_feats [M,3] (dim=2: r,sin,cos) oder [M,4] (dim=3: r,sin,cos,z),
+    in SORTIERTER new-Reihenfolge, und ptr_targets [cpb*F] (Face-/Block-Zeiger auf
+    new-Indizes, Face-Traversal-Reihenfolge)."""
     n = len(data) if n_max is None else min(n_max, len(data))
     examples = []
     for idx in range(n):
@@ -64,12 +65,16 @@ def build_examples(data, tok, n_max=None):
         vp = d['vertices_polar'].numpy()
         r = vp[order, 0]
         th = vp[order, 1]
-        vert_feats = np.stack([r, np.sin(th), np.cos(th)], axis=1).astype(np.float32)
-        faces_new = meta['faces_new']              # [4,F] (new-Indizes)
-        ptr = faces_new.T.reshape(-1).astype(np.int64)   # [4F] Face-Traversal
+        if tok.dim == 3:
+            z = vp[order, 2]
+            vert_feats = np.stack([r, np.sin(th), np.cos(th), z], axis=1).astype(np.float32)
+        else:
+            vert_feats = np.stack([r, np.sin(th), np.cos(th)], axis=1).astype(np.float32)
+        faces_new = meta['faces_new']              # [cpb,F] (new-Indizes)
+        ptr = faces_new.T.reshape(-1).astype(np.int64)   # [cpb*F] Face-Traversal
         examples.append((torch.from_numpy(vert_feats),
                          torch.from_numpy(ptr),
-                         faces_new.T.copy()))       # [F,4] fuers Auswerten
+                         faces_new.T.copy()))       # [F,cpb] fuers Auswerten
     return examples
 
 
@@ -78,10 +83,11 @@ def build_examples(data, tok, n_max=None):
 # ------------------------------------------------------------------
 class PointerFaceModel(nn.Module):
     def __init__(self, d_model=256, n_heads=8, n_enc=4, n_dec=4,
-                 d_ff_mult=4, dropout=0.0, max_ptr=4096):
+                 d_ff_mult=4, dropout=0.0, max_ptr=4096, vert_feat_dim=3):
         super().__init__()
         self.d_model = d_model
-        self.vert_proj = nn.Linear(3, d_model)     # (r, sin, cos) -> d
+        # dim=2 vert_feats: (r, sin, cos) -> 3. dim=3: (r, sin, cos, z) -> 4.
+        self.vert_proj = nn.Linear(vert_feat_dim, d_model)
         enc_layer = nn.TransformerEncoderLayer(
             d_model, n_heads, d_ff_mult * d_model, dropout,
             activation='gelu', batch_first=True, norm_first=True)
@@ -97,7 +103,7 @@ class PointerFaceModel(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model)
 
     def encode(self, vert_feats, vert_pad=None):
-        """vert_feats [B,M,3] -> H [B,M,d]  (bidirektional; Vertices sind bekannt).
+        """vert_feats [B,M,vert_feat_dim] -> H [B,M,d]  (bidirektional; Vertices sind bekannt).
         vert_pad [B,M] bool (True=Padding, wird ignoriert)."""
         return self.encoder(self.vert_proj(vert_feats), src_key_padding_mask=vert_pad)
 
@@ -201,7 +207,7 @@ def main():
     print(f"Lade {args.data} ...")
     data = torch.load(args.data, weights_only=False)
     max_v = max(d['vertices_polar'].shape[0] for d in data)
-    tok = TwoStageTokenizer(max_vertices=max_v + 16)   # nur fuer meta (order/faces_new)
+    tok = PolytronTokenizer(max_vertices=max_v + 16)   # nur fuer meta (order/faces_new)
 
     examples = build_examples(data, tok, n_max=args.n)
     Ms = [e[0].shape[0] for e in examples]

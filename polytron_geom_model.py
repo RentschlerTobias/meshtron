@@ -1,10 +1,10 @@
 """
-geom_head_prototype.py
+polytron_geom_model.py
 
 STUFE 3: Geometrie-Kopf. Gegeben die Vertices (Stufe 1) + die Face-Topologie
 (Stufe 2, Pointer-Faces), regressiere pro gerichteter Half-Edge die HO-Kanten-
 geometrie als cubic_bezier-Kontrollpunkte (s1,h1,s2,h2 Chord-lokal, siehe
-prototype_twostage.py). Multigraph-treu: (a,b) und (b,a) sind VERSCHIEDENE Kanten
+polytron_tokenizer.py). Multigraph-treu: (a,b) und (b,a) sind VERSCHIEDENE Kanten
 (Blade Druck/Saug) -> geordnete Edge-Features, kein {a,b}-Dedup.
 
 Nicht autoregressiv: die Topologie ist komplett bekannt, alle Kanten-Geometrien
@@ -15,7 +15,7 @@ werden PARALLEL vorhergesagt. Modell:
 Loss = SmoothL1 auf die 4 Skalare. Metrik = Kurven-Rekonstruktionsfehler vs echte
 Streamline (max-dist / Chord), vergleichbar mit dem Fit-Floor (Targets selbst).
 
-  ~/Environments/meshtron/bin/python geom_head_prototype.py \
+  ~/Environments/meshtron/bin/python polytron_geom_model.py \
       [--data domain_data_smoke.pt] [--d-model 256] [--batch 32] [--epochs 30]
 """
 
@@ -30,41 +30,76 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from prototype_twostage import TwoStageTokenizer
+from polytron_tokenizer import PolytronTokenizer
 
 
 # ------------------------------------------------------------------
 # Daten: (vert_feats, edges_new, targets, refs) je Mesh
 # ------------------------------------------------------------------
 def build_geom_examples(data, tok):
-    """Pro Mesh: vert_feats [M,3], edges_new [E,2] (new-Idx, Face-Traversal),
-    targets [E,4] (s1,h1,s2,h2), edges_glob [E,2] (global, fuer Eval)."""
+    """Pro Mesh: vert_feats [M,3] (dim=2) oder [M,4] (dim=3), edges_new [E,2]
+    (new-Idx, Face-Traversal ueber tok._face_edge_pairs() -- korrekte Kanten-
+    topologie, NICHT range(corners_per_block), siehe polytron_tokenizer.py),
+    targets [E,4] (dim=2: s1,h1,s2,h2) oder [E,6] (dim=3: s1,h1a,h1b,s2,h2a,h2b),
+    edges_glob [E,2] (global, fuer Eval)."""
     examples = []
+    edge_pairs = tok._face_edge_pairs()
     for d in data:
         _, meta = tok.tokenize(d)
         order = meta['order']; old2new = meta['old2new']
         vp = d['vertices_polar'].numpy()
         r = vp[order, 0]; th = vp[order, 1]
-        vf = np.stack([r, np.sin(th), np.cos(th)], axis=1).astype(np.float32)
+        if tok.dim == 3:
+            z = vp[order, 2]
+            vf = np.stack([r, np.sin(th), np.cos(th), z], axis=1).astype(np.float32)
+        else:
+            vf = np.stack([r, np.sin(th), np.cos(th)], axis=1).astype(np.float32)
         cart = d['vertices_cartesian'].numpy()
-        e2s = d['edge_to_streamline']
-        faces_g = d['faces'].numpy()               # [4,F] global
+        faces_g = d['faces'].numpy()               # [cpb,F] global
         F_ = faces_g.shape[1]
         e_new = []; e_glob = []; tgt = []
-        for fi in range(F_):
-            for k in range(4):
-                p0 = int(faces_g[k, fi]); p1 = int(faces_g[(k + 1) % 4, fi])
-                a = int(old2new[p0]); b = int(old2new[p1])
-                P0, P1 = cart[p0], cart[p1]
-                pts = e2s.get((p0, p1))
-                if pts is None:
-                    s1, h1, s2, h2 = 1 / 3, 0.0, 2 / 3, 0.0
-                else:
-                    B1, B2 = TwoStageTokenizer._fit_cubic_bezier(P0, P1, pts)
-                    uh, nh, L = TwoStageTokenizer._chord_frame(P0, P1)
-                    s1 = float(np.dot(B1 - P0, uh) / L); h1 = float(np.dot(B1 - P0, nh) / L)
-                    s2 = float(np.dot(B2 - P0, uh) / L); h2 = float(np.dot(B2 - P0, nh) / L)
-                e_new.append((a, b)); e_glob.append((p0, p1)); tgt.append((s1, h1, s2, h2))
+
+        if tok.dim == 3:
+            ei = d['edge_index'].numpy(); ec = d['edge_ctrl'].numpy()
+            ctrl = {(int(ei[0, e]), int(ei[1, e])): ec[e] for e in range(ei.shape[1])}
+            for fi in range(F_):
+                for k0, k1 in edge_pairs:
+                    p0 = int(faces_g[k0, fi]); p1 = int(faces_g[k1, fi])
+                    a = int(old2new[p0]); b = int(old2new[p1])
+                    P0, P1 = cart[p0], cart[p1]
+                    info = ctrl.get((p0, p1))
+                    if info is None:
+                        B1 = P0 + (P1 - P0) / 3; B2 = P0 + 2 * (P1 - P0) / 3
+                    else:
+                        B1, B2 = info[0], info[1]
+                    uh, nh1, nh2, L = PolytronTokenizer._chord_frame_3d(P0, P1)
+                    s1 = float(np.dot(B1 - P0, uh) / L)
+                    h1a = float(np.dot(B1 - P0, nh1) / L); h1b = float(np.dot(B1 - P0, nh2) / L)
+                    s2 = float(np.dot(B2 - P0, uh) / L)
+                    h2a = float(np.dot(B2 - P0, nh1) / L); h2b = float(np.dot(B2 - P0, nh2) / L)
+                    e_new.append((a, b)); e_glob.append((p0, p1))
+                    tgt.append((s1, h1a, h1b, s2, h2a, h2b))
+            # edge_to_streamline is populated for dim=3 too (domain_extractor_3d.py
+            # rebuilds it from edge_polyline/edge_polyline_offset) -- kept for
+            # curve_eval's ground-truth comparison, same role as dim=2.
+            e2s = d.get('edge_to_streamline')
+        else:
+            e2s = d['edge_to_streamline']
+            for fi in range(F_):
+                for k0, k1 in edge_pairs:
+                    p0 = int(faces_g[k0, fi]); p1 = int(faces_g[k1, fi])
+                    a = int(old2new[p0]); b = int(old2new[p1])
+                    P0, P1 = cart[p0], cart[p1]
+                    pts = e2s.get((p0, p1))
+                    if pts is None:
+                        s1, h1, s2, h2 = 1 / 3, 0.0, 2 / 3, 0.0
+                    else:
+                        B1, B2 = PolytronTokenizer._fit_cubic_bezier(P0, P1, pts)
+                        uh, nh, L = PolytronTokenizer._chord_frame(P0, P1)
+                        s1 = float(np.dot(B1 - P0, uh) / L); h1 = float(np.dot(B1 - P0, nh) / L)
+                        s2 = float(np.dot(B2 - P0, uh) / L); h2 = float(np.dot(B2 - P0, nh) / L)
+                    e_new.append((a, b)); e_glob.append((p0, p1)); tgt.append((s1, h1, s2, h2))
+
         examples.append({
             'vf': torch.from_numpy(vf),
             'e_new': torch.tensor(e_new, dtype=torch.long),
@@ -78,9 +113,12 @@ def build_geom_examples(data, tok):
 # Modell: Geometrie-Kopf
 # ------------------------------------------------------------------
 class GeomHeadModel(nn.Module):
-    def __init__(self, d_model=256, n_heads=8, n_enc=4, n_edge=4, d_ff_mult=4):
+    def __init__(self, d_model=256, n_heads=8, n_enc=4, n_edge=4, d_ff_mult=4,
+                 vert_feat_dim=3, geom_out_dim=4):
         super().__init__()
-        self.vert_proj = nn.Linear(3, d_model)
+        # dim=2: vert_feat_dim=3 (r,sin,cos), geom_out_dim=4 (s1,h1,s2,h2).
+        # dim=3: vert_feat_dim=4 (r,sin,cos,z), geom_out_dim=6 (s1,h1a,h1b,s2,h2a,h2b).
+        self.vert_proj = nn.Linear(vert_feat_dim, d_model)
         enc = nn.TransformerEncoderLayer(d_model, n_heads, d_ff_mult * d_model,
                                          activation='gelu', batch_first=True,
                                          norm_first=True)
@@ -90,10 +128,10 @@ class GeomHeadModel(nn.Module):
                                          activation='gelu', batch_first=True,
                                          norm_first=True)
         self.edge_enc = nn.TransformerEncoder(eec, n_edge)
-        self.head = nn.Linear(d_model, 4)
+        self.head = nn.Linear(d_model, geom_out_dim)
 
     def forward(self, vf, e_new, vpad=None, epad=None):
-        """vf [B,M,3], e_new [B,E,2] -> geom [B,E,4]."""
+        """vf [B,M,vert_feat_dim], e_new [B,E,2] -> geom [B,E,geom_out_dim]."""
         H = self.encoder(self.vert_proj(vf), src_key_padding_mask=vpad)   # [B,M,d]
         d = H.size(-1)
         a = e_new[..., 0].clamp(min=0); b = e_new[..., 1].clamp(min=0)
@@ -108,12 +146,16 @@ class GeomHeadModel(nn.Module):
 # Batching
 # ------------------------------------------------------------------
 def collate(batch):
+    """vert_feat_dim (3 or 4) and geom_out_dim (4 or 6) read from the data
+    itself rather than hardcoded -- same reasoning as train_pointer.py:collate."""
     Mmax = max(e['vf'].shape[0] for e in batch)
     Emax = max(e['e_new'].shape[0] for e in batch)
+    vert_feat_dim = batch[0]['vf'].shape[1]
+    geom_out_dim = batch[0]['tgt'].shape[1]
     B = len(batch)
-    vf = torch.zeros(B, Mmax, 3); vpad = torch.ones(B, Mmax, dtype=torch.bool)
+    vf = torch.zeros(B, Mmax, vert_feat_dim); vpad = torch.ones(B, Mmax, dtype=torch.bool)
     e_new = torch.zeros(B, Emax, 2, dtype=torch.long)
-    tgt = torch.zeros(B, Emax, 4); epad = torch.ones(B, Emax, dtype=torch.bool)
+    tgt = torch.zeros(B, Emax, geom_out_dim); epad = torch.ones(B, Emax, dtype=torch.bool)
     for i, e in enumerate(batch):
         M, E = e['vf'].shape[0], e['e_new'].shape[0]
         vf[i, :M] = e['vf']; vpad[i, :M] = False
@@ -158,16 +200,21 @@ def run_epoch(model, order, examples, bs, opt, sched, clip, device, train=True,
 
 @torch.no_grad()
 def curve_eval(model, examples, ids, device, n=50):
-    """Kurven-Rekonstruktionsfehler (max-dist/Chord) je Half-Edge: Modell vs Fit-Floor."""
+    """Kurven-Rekonstruktionsfehler (max-dist/Chord) je Half-Edge: Modell vs Fit-Floor.
+    dim inferred from the target width (4 = dim=2, 6 = dim=3) rather than a
+    separate parameter -- self-contained, matches the data actually in hand."""
     model.eval()
     err_model = []; err_floor = []
     for i in ids:
         e = examples[i]
         vf = e['vf'].unsqueeze(0).to(device)
         en = e['e_new'].unsqueeze(0).to(device)
-        pred = model(vf, en)[0].cpu().numpy()              # [E,4]
+        pred = model(vf, en)[0].cpu().numpy()              # [E,4] or [E,6]
         tgt = e['tgt'].numpy()
+        dim3 = tgt.shape[-1] == 6
         cart = e['cart']; e2s = e['e2s']; eg = e['e_glob']
+        if e2s is None:
+            continue
         for j in range(len(eg)):
             p0, p1 = int(eg[j, 0]), int(eg[j, 1])
             pts = e2s.get((p0, p1))
@@ -175,12 +222,20 @@ def curve_eval(model, examples, ids, device, n=50):
                 continue
             pts = np.asarray(pts, float)
             P0, P1 = cart[p0], cart[p1]
-            uh, nh, L = TwoStageTokenizer._chord_frame(P0, P1)
             chord = np.linalg.norm(P1 - P0) + 1e-9
+            if dim3:
+                uh, nh1, nh2, L = PolytronTokenizer._chord_frame_3d(P0, P1)
+            else:
+                uh, nh, L = PolytronTokenizer._chord_frame(P0, P1)
             for scal, bucket in ((pred[j], err_model), (tgt[j], err_floor)):
-                s1, h1, s2, h2 = scal
-                B1 = P0 + s1 * L * uh + h1 * L * nh
-                B2 = P0 + s2 * L * uh + h2 * L * nh
+                if dim3:
+                    s1, h1a, h1b, s2, h2a, h2b = scal
+                    B1 = P0 + s1 * L * uh + h1a * L * nh1 + h1b * L * nh2
+                    B2 = P0 + s2 * L * uh + h2a * L * nh1 + h2b * L * nh2
+                else:
+                    s1, h1, s2, h2 = scal
+                    B1 = P0 + s1 * L * uh + h1 * L * nh
+                    B2 = P0 + s2 * L * uh + h2 * L * nh
                 curve = _cubic_curve(P0, P1, B1, B2, n)
                 # naechster-Punkt-Abstand Kurve<->GT (grob: pro GT-Punkt min dist)
                 dd = np.linalg.norm(pts[:, None, :] - curve[None, :, :], axis=2).min(1)
@@ -197,6 +252,8 @@ def _cubic_curve(P0, P1, B1, B2, n):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default='domain_data_smoke.pt')
+    ap.add_argument('--dim', type=int, default=2, choices=[2, 3])
+    ap.add_argument('--corners-per-block', type=int, default=4)
     ap.add_argument('--d-model', type=int, default=256)
     ap.add_argument('--n-enc', type=int, default=4)
     ap.add_argument('--n-edge', type=int, default=4)
@@ -221,7 +278,8 @@ def main():
     if args.limit:
         data = data[:args.limit]
     max_v = max(d['vertices_polar'].shape[0] for d in data)
-    tok = TwoStageTokenizer(max_vertices=max_v + 16, repr_mode='cubic_bezier')
+    tok = PolytronTokenizer(max_vertices=max_v + 16, repr_mode='cubic_bezier',
+                            dim=args.dim, corners_per_block=args.corners_per_block)
     print(f"baue Geom-Beispiele aus {len(data)} Meshes ...")
     t0 = time.time()
     examples = build_geom_examples(data, tok)
@@ -235,8 +293,10 @@ def main():
     val_ids = perm[:n_val]; train_ids = perm[n_val:]
     print(f"split: {len(train_ids)} train / {len(val_ids)} val")
 
-    model = GeomHeadModel(d_model=args.d_model, n_enc=args.n_enc,
-                          n_edge=args.n_edge).to(device)
+    vert_feat_dim = 4 if args.dim == 3 else 3
+    geom_out_dim = 6 if args.dim == 3 else 4
+    model = GeomHeadModel(d_model=args.d_model, n_enc=args.n_enc, n_edge=args.n_edge,
+                          vert_feat_dim=vert_feat_dim, geom_out_dim=geom_out_dim).to(device)
     n_par = sum(p.numel() for p in model.parameters())
     print(f"GeomHeadModel d={args.d_model} enc={args.n_enc} edge={args.n_edge}  "
           f"Params {n_par/1e6:.2f}M  device={device}")

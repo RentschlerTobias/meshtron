@@ -1,7 +1,7 @@
 """
 viz_twostage.py
 
-Erzeugt eine Bildserie, die den Zwei-Stufen-Tokenizer (prototype_twostage.py)
+Erzeugt eine Bildserie, die den Zwei-Stufen-Tokenizer (polytron_tokenizer.py)
 Schritt fuer Schritt erklaert: Tokenisierung -> Sequenz -> Detokenisierung -> Round-trip.
 
 Ausgabe: figures/twostage/01..08_*.png
@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
 
-from prototype_twostage import TwoStageTokenizer
+from polytron_tokenizer import PolytronTokenizer
 
 OUT = "figures/twostage"
 os.makedirs(OUT, exist_ok=True)
@@ -528,9 +528,9 @@ def fig11_compare_methods(mesh, tok):
     e_h, e_b, e_c = relerr(c_herm), relerr(c_bez), relerr(c_cub)
 
     # Token-Zahlen fuer diese eine Kante
-    ht = TwoStageTokenizer(quantization_r=tok.Qr, quantization_a=tok.Qa,
+    ht = PolytronTokenizer(quantization_r=tok.Qr, quantization_a=tok.Qa,
                            max_vertices=8, repr_mode='hermite')
-    ct = TwoStageTokenizer(quantization_r=tok.Qr, quantization_a=tok.Qa,
+    ct = PolytronTokenizer(quantization_r=tok.Qr, quantization_a=tok.Qa,
                            max_vertices=8, repr_mode='cubic_bezier')
     ts0, tc0 = ht._q_angle(a_s); ts1, tc1 = ht._q_angle(a_e)
     q0 = ht._q_scalar(tn_s, tn_min, tn_max); q1 = ht._q_scalar(tn_e, tn_min, tn_max)
@@ -594,7 +594,7 @@ def fig11_compare_methods(mesh, tok):
 
 if __name__ == "__main__":
     mesh = load_mesh(0)
-    tok = TwoStageTokenizer(max_vertices=64)
+    tok = PolytronTokenizer(max_vertices=64)
     fig1_input(mesh)
     fig2_polar(mesh)
     fig3_sort(mesh, tok)

@@ -1,7 +1,7 @@
 """
-prototype_twostage.py
+polytron_tokenizer.py
 
-Prototyp fuer den Zwei-Stufen-Tokenizer (Plan B, siehe
+Prototyp fuer den Zwei-Stufen-Tokenizer (Polytron, siehe
 docs/ho_quad_transformer/05_face_block_generator.md).
 
 Idee: Topologie von Geometrie trennen.
@@ -34,25 +34,39 @@ import numpy as np
 import torch
 
 
-class TwoStageTokenizer:
+class PolytronTokenizer:
     def __init__(self, quantization_r=512, quantization_a=256, max_vertices=2048,
-                 repr_mode='hermite', r_bounds=(0.0, 1.0), tn_bounds=(0.0, 1.0)):
+                 repr_mode='hermite', r_bounds=(0.0, 1.0), tn_bounds=(0.0, 1.0),
+                 dim=2, corners_per_block=4, z_bounds=(0.0, 1.0)):
         # repr_mode:
         #   'hermite' -> pro Half-Edge 6 Tokens (α_s sin/cos, tn_s, α_e sin/cos, tn_e).
         #                kubisch, kann Wendepunkte (S-Kurve), braucht Tangenten-Betrag.
+        #                dim=2 NUR.
         #   'bezier'  -> pro Half-Edge 4 Tokens (α_s sin/cos, α_e sin/cos).
         #                quadratisch (k=2), Kontrollpunkt = Tangentenschnitt, KEIN Betrag
-        #                -> kein Overshoot, kuerzere Sequenz, aber KEIN Wendepunkt.
-        #   'cubic_bezier' -> pro Half-Edge 4 Tokens (s1,h1,s2,h2 in Chord-lokalen
-        #                Koords). Kubisch, best-fit an die Streamline (2 Kontrollpunkte
-        #                per Least-Squares). Kann Wendepunkt (S) UND ist genauer als
-        #                hermite, weil nicht an die Extractor-Tangenten gebunden.
+        #                -> kein Overshoot, kuerzere Sequenz, aber KEIN Wendepunkt. dim=2 NUR.
+        #   'cubic_bezier' -> dim=2: pro Half-Edge 4 Tokens (s1,h1,s2,h2 in Chord-lokalen
+        #                Koords, 2D-Normalenachse). dim=3: 6 Tokens (s1,h1a,h1b,s2,h2a,h2b
+        #                -- 3D-Chord-Frame mit 2 Normalenachsen). Kontrollpunkte kommen bei
+        #                dim=3 direkt aus dem Datensatz (edge_ctrl, tistos), kein
+        #                Least-Squares-Fit noetig (siehe tokenize()).
+        assert dim in (2, 3), f"dim must be 2 or 3, got {dim}"
+        if dim == 3:
+            assert repr_mode == 'cubic_bezier', \
+                "dim=3 unterstuetzt nur repr_mode='cubic_bezier' (hermite/bezier(k=2) " \
+                "sind an eine 2D-Winkel-Konvention gebunden, die in 3D nicht eindeutig ist)"
         assert repr_mode in ('hermite', 'bezier', 'cubic_bezier')
+        self.dim = dim
+        self.corners_per_block = corners_per_block
         self.repr_mode = repr_mode
-        self.geom_per_edge = 6 if repr_mode == 'hermite' else 4
+        if dim == 3:
+            self.geom_per_edge = 6   # 2 Kontrollpunkte * (s, h1, h2)
+        else:
+            self.geom_per_edge = 6 if repr_mode == 'hermite' else 4
         self.Qr = quantization_r
         self.Qa = quantization_a
         self.Vmax = max_vertices
+        self.Z_MIN, self.Z_MAX = z_bounds
 
         self.off_r = 0
         self.off_ts = self.Qr
@@ -132,12 +146,36 @@ class TwoStageTokenizer:
         rp = (rmax - rmin) * pad; tp = (tnmax - tnmin) * pad
         return (rmin - rp, rmax + rp), (tnmin - tp, tnmax + tp)
 
+    # ---- Face/Block-Kantentopologie -------------------------------------
+    # Ein planares Quad (4 Ecken) IST sein eigener 4er-Ring -- Kante k geht von
+    # Ecke k zu Ecke (k+1)%4. Ein Hex-Block (8 Ecken, VTK_HEXAHEDRON-Reihenfolge:
+    # 0-3 = untere Flaeche CCW, 4-7 = obere Flaeche CCW) ist KEIN 8er-Ring -- er
+    # hat 12 Kanten (4 unten + 4 oben + 4 vertikal). `(k+1)%corners_per_block`
+    # waere fuer Hex-Bloecke falsch (erzeugt z.B. die Nicht-Kante 3->4). Diese
+    # Tabelle ist deshalb explizit statt aus corners_per_block hergeleitet.
+    _QUAD_EDGES = [(0, 1), (1, 2), (2, 3), (3, 0)]
+    _HEX_EDGES = [(0, 1), (1, 2), (2, 3), (3, 0),
+                  (4, 5), (5, 6), (6, 7), (7, 4),
+                  (0, 4), (1, 5), (2, 6), (3, 7)]
+
+    def _face_edge_pairs(self):
+        """(local_idx0, local_idx1) Paare je Face/Block -- Anzahl Half-Edges pro
+        Einheit ist deshalb NICHT immer `corners_per_block` (12 != 8 bei Hex)."""
+        if self.corners_per_block == 4:
+            return self._QUAD_EDGES
+        if self.corners_per_block == 8:
+            return self._HEX_EDGES
+        raise ValueError(
+            f"Keine Kantentopologie fuer corners_per_block={self.corners_per_block} "
+            "definiert (nur 4=Quad, 8=Hex unterstuetzt)")
+
     # ---- Tokenize ------------------------------------------------------
     def tokenize(self, mesh_data):
-        vp = mesh_data['vertices_polar']          # [M,2] (r, theta)
-        faces = mesh_data['faces']                # [4, F] globale Indizes
+        vp = mesh_data['vertices_polar']          # [M,2] (r,theta) dim=2, [M,3] (r,theta,z) dim=3
+        faces = mesh_data['faces']                # [corners_per_block, F] globale Indizes
         M = vp.shape[0]
         assert M <= self.Vmax, f"M={M} > Vmax={self.Vmax}"
+        cpb = self.corners_per_block
 
         # 1) Vertices sortieren, old->new Mapping
         order = self._sort_order(vp)              # new_pos -> old_idx
@@ -149,26 +187,69 @@ class TwoStageTokenizer:
 
         toks = [self.start_token]
 
-        # Stufe 1: sortierte Vertices
+        # Stufe 1: sortierte Vertices. dim=2: (r,sin,cos). dim=3: (r,sin,cos,z).
         for new_i in range(M):
             old_i = order[new_i]
             r = float(vp[old_i, 0]); th = float(vp[old_i, 1])
             r_tok = self._q_scalar(r, r_min, r_max) + self.off_r
             ts, tc = self._q_angle(th)
             toks += [r_tok, ts + self.off_ts, tc + self.off_tc]
+            if self.dim == 3:
+                z = float(vp[old_i, 2])
+                toks.append(self._q_scalar(z, self.Z_MIN, self.Z_MAX) + self.off_r)
 
         toks.append(self.sep_token)
 
         # Stufe 2: Faces als Pointer (auf new-Indizes)
         F = faces.shape[1]
-        faces_new = old2new[faces.numpy()]        # [4, F]
+        faces_new = old2new[faces.numpy()]        # [cpb, F]
         for fi in range(F):
-            for k in range(4):
+            for k in range(cpb):
                 toks.append(int(faces_new[k, fi]) + self.off_idx)
 
         toks.append(self.sep2_token)
 
-        # Stufe 3: HO-Kantengeometrie pro gerichteter Half-Edge (Face-Traversal)
+        faces_g = faces.numpy()                       # [cpb,F] global
+        n_missing = 0
+        if self.dim == 3:
+            # Stufe 3 (dim=3): edge_ctrl liefert die 2 Kontrollpunkte direkt (bereits
+            # gefittet, tistos) -- kein Least-Squares-Fit noetig, nur Chord-lokal kodieren
+            # ueber eine 3D-Chord-Frame (2 Normalenachsen statt 1 wie in 2D).
+            ei = mesh_data['edge_index'].numpy()       # [2,E] global
+            ec = mesh_data['edge_ctrl'].numpy()        # [E,2,3] global, je Kante 2 Kontrollpkt.
+            ctrl = {(int(ei[0, e]), int(ei[1, e])): ec[e] for e in range(ei.shape[1])}
+            cart = mesh_data['vertices_cartesian'].numpy()   # [M,3]
+
+            edge_pairs = self._face_edge_pairs()
+            for fi in range(F):
+                for k0, k1 in edge_pairs:
+                    p0 = int(faces_g[k0, fi]); p1 = int(faces_g[k1, fi])
+                    P0, P1 = cart[p0], cart[p1]
+                    info = ctrl.get((p0, p1))
+                    if info is None:
+                        n_missing += 1
+                        B1 = P0 + (P1 - P0) / 3; B2 = P0 + 2 * (P1 - P0) / 3   # gerade
+                    else:
+                        B1, B2 = info[0], info[1]
+                    uh, nh1, nh2, L = self._chord_frame_3d(P0, P1)
+                    s1 = float(np.dot(B1 - P0, uh) / L)
+                    h1a = float(np.dot(B1 - P0, nh1) / L); h1b = float(np.dot(B1 - P0, nh2) / L)
+                    s2 = float(np.dot(B2 - P0, uh) / L)
+                    h2a = float(np.dot(B2 - P0, nh1) / L); h2b = float(np.dot(B2 - P0, nh2) / L)
+                    toks += [self._q_scalar(s1, self.S_MIN, self.S_MAX) + self.off_r,
+                             self._q_scalar(h1a, self.H_MIN, self.H_MAX) + self.off_r,
+                             self._q_scalar(h1b, self.H_MIN, self.H_MAX) + self.off_r,
+                             self._q_scalar(s2, self.S_MIN, self.S_MAX) + self.off_r,
+                             self._q_scalar(h2a, self.H_MIN, self.H_MAX) + self.off_r,
+                             self._q_scalar(h2b, self.H_MIN, self.H_MAX) + self.off_r]
+
+            toks.append(self.end_token)
+            meta = {'r_min': r_min, 'r_max': r_max, 'M': M, 'F': F,
+                    'order': order, 'old2new': old2new, 'faces_new': faces_new,
+                    'n_missing_edges': n_missing}
+            return toks, meta
+
+        # Stufe 3 (dim=2, unveraendert): HO-Kantengeometrie pro gerichteter Half-Edge
         # Lookup gerichtete Kante (global) -> [a_start, tn_start, a_end, tn_end]
         ei = mesh_data['edge_index'].numpy()          # [2,E] global
         et = mesh_data['edge_tangents'].numpy()       # [E,4]
@@ -177,8 +258,6 @@ class TwoStageTokenizer:
         e2s = mesh_data['edge_to_streamline']         # (u,v) -> [N,2] global
         cart = mesh_data['vertices_cartesian'].numpy()
 
-        faces_g = faces.numpy()                       # [4,F] global
-        n_missing = 0
         for fi in range(F):
             for k in range(4):
                 p0 = int(faces_g[k, fi]); p1 = int(faces_g[(k + 1) % 4, fi])
@@ -225,10 +304,13 @@ class TwoStageTokenizer:
         return toks, meta
 
     # ---- Detokenize ----------------------------------------------------
-    def detokenize(self, toks, r_min=None, r_max=None, tn_min=None, tn_max=None):
+    def detokenize(self, toks, r_min=None, r_max=None, tn_min=None, tn_max=None,
+                   z_min=None, z_max=None):
         """Rekonstruiert (vertices, faces_new, geom) aus der Sequenz.
 
-        geom: Liste je Half-Edge [a_start, tn_start, a_end, tn_end] (rad/skaliert),
+        dim=2: geom = Liste je Half-Edge [a_start, tn_start, a_end, tn_end] (hermite/bezier)
+        oder [s1,h1,s2,h2] (cubic_bezier). dim=3: geom = [s1,h1a,h1b,s2,h2a,h2b] je
+        Half-Edge (3D-Chord-Frame, siehe tokenize()/_chord_frame_3d).
         Reihenfolge = Face-Traversal (fi, k). Leer, wenn keine Stufe-3-Sektion.
 
         Bounds sind default die FIXEN self-Bounds -> kein per-Mesh meta noetig
@@ -238,6 +320,8 @@ class TwoStageTokenizer:
         if r_max is None: r_max = self.R_MAX
         if tn_min is None: tn_min = self.TN_MIN
         if tn_max is None: tn_max = self.TN_MAX
+        if z_min is None: z_min = self.Z_MIN
+        if z_max is None: z_max = self.Z_MAX
         try:
             i_start = toks.index(self.start_token)
         except ValueError:
@@ -253,22 +337,30 @@ class TwoStageTokenizer:
         ftoks = toks[i_sep + 1:i_sep2]
         gtoks = toks[i_sep2 + 1:i_end] if i_sep2 < i_end else []
 
-        # Stufe 1: je 3 Tokens = ein Vertex
-        n_v = len(vtoks) // 3
+        cpb = self.corners_per_block
+        vpv = 4 if self.dim == 3 else 3   # Tokens pro Vertex
+
+        # Stufe 1: je vpv Tokens = ein Vertex
+        n_v = len(vtoks) // vpv
         verts = []
         for i in range(n_v):
-            r_tok = vtoks[3 * i] - self.off_r
-            ts = vtoks[3 * i + 1] - self.off_ts
-            tc = vtoks[3 * i + 2] - self.off_tc
+            base = vpv * i
+            r_tok = vtoks[base] - self.off_r
+            ts = vtoks[base + 1] - self.off_ts
+            tc = vtoks[base + 2] - self.off_tc
             r = self._dq_scalar(r_tok, r_min, r_max)
             th = self._dq_angle(ts, tc)            # [-pi, pi]
-            verts.append((r, th))
+            if self.dim == 3:
+                z = self._dq_scalar(vtoks[base + 3] - self.off_r, z_min, z_max)
+                verts.append((r, th, z))
+            else:
+                verts.append((r, th))
 
-        # Stufe 2: je 4 Tokens = ein Face (Pointer)
-        n_f = len(ftoks) // 4
+        # Stufe 2: je cpb Tokens = ein Face (Pointer)
+        n_f = len(ftoks) // cpb
         faces_new = []
         for i in range(n_f):
-            quad = [ftoks[4 * i + k] - self.off_idx for k in range(4)]
+            quad = [ftoks[cpb * i + k] - self.off_idx for k in range(cpb)]
             faces_new.append(quad)
 
         # Stufe 3: je geom_per_edge Tokens = eine gerichtete Half-Edge
@@ -277,7 +369,15 @@ class TwoStageTokenizer:
         n_g = len(gtoks) // gpe
         for i in range(n_g):
             g = gtoks[gpe * i:gpe * i + gpe]
-            if self.repr_mode == 'hermite':
+            if self.dim == 3:
+                s1 = self._dq_scalar(g[0] - self.off_r, self.S_MIN, self.S_MAX)
+                h1a = self._dq_scalar(g[1] - self.off_r, self.H_MIN, self.H_MAX)
+                h1b = self._dq_scalar(g[2] - self.off_r, self.H_MIN, self.H_MAX)
+                s2 = self._dq_scalar(g[3] - self.off_r, self.S_MIN, self.S_MAX)
+                h2a = self._dq_scalar(g[4] - self.off_r, self.H_MIN, self.H_MAX)
+                h2b = self._dq_scalar(g[5] - self.off_r, self.H_MIN, self.H_MAX)
+                geom.append([s1, h1a, h1b, s2, h2a, h2b])
+            elif self.repr_mode == 'hermite':
                 a_s = self._dq_angle(g[0] - self.off_ts, g[1] - self.off_tc)
                 a_e = self._dq_angle(g[3] - self.off_ts, g[4] - self.off_tc)
                 tn_s = self._dq_scalar(g[2] - self.off_r, tn_min, tn_max)
@@ -314,6 +414,22 @@ class TwoStageTokenizer:
         uh = u / L
         nh = np.array([-uh[1], uh[0]])
         return uh, nh, L
+
+    @staticmethod
+    def _chord_frame_3d(P0, P1):
+        """3D-Gegenstueck zu `_chord_frame`: Sehnen-Richtung `uh` plus zwei orthonormale
+        Normalenachsen `nh1, nh2`, die die zu `uh` senkrechte Ebene aufspannen (es gibt in
+        3D keine einzelne eindeutige Normalenrichtung wie in 2D -- daher zwei Achsen statt
+        einer, konstruiert per Gram-Schmidt gegen einen Referenzvektor)."""
+        u = np.asarray(P1, float) - np.asarray(P0, float)
+        L = float(np.linalg.norm(u))
+        if L < 1e-12:
+            return np.array([1., 0., 0.]), np.array([0., 1., 0.]), np.array([0., 0., 1.]), 1e-12
+        uh = u / L
+        ref = np.array([0., 0., 1.]) if abs(uh[2]) < 0.9 else np.array([1., 0., 0.])
+        nh1 = np.cross(uh, ref); nh1 /= np.linalg.norm(nh1)
+        nh2 = np.cross(uh, nh1)  # bereits Einheitslaenge (uh, nh1 orthonormal)
+        return uh, nh1, nh2, L
 
     @staticmethod
     def _fit_cubic_bezier(P0, P1, pts):
@@ -367,6 +483,27 @@ class TwoStageTokenizer:
 
         Returns Liste von Dicts: {P0,P1,curve,(u,v)} in Face-Traversal-Reihenfolge.
         """
+        cpb = self.corners_per_block
+        if self.dim == 3:
+            cx, cy = float(center[0]), float(center[1])
+            cz = float(center[2]) if len(center) > 2 else 0.0
+            xy = np.array([[cx + r * np.cos(th), cy + r * np.sin(th), cz + z]
+                           for (r, th, z) in verts])
+            edges = []
+            j = 0
+            edge_pairs = self._face_edge_pairs()
+            for quad in faces_new:
+                for k0, k1 in edge_pairs:
+                    u = quad[k0]; v = quad[k1]
+                    P0, P1 = xy[u], xy[v]
+                    s1, h1a, h1b, s2, h2a, h2b = geom[j]; j += 1
+                    uh, nh1, nh2, L = self._chord_frame_3d(P0, P1)
+                    B1 = P0 + s1 * L * uh + h1a * L * nh1 + h1b * L * nh2
+                    B2 = P0 + s2 * L * uh + h2a * L * nh1 + h2b * L * nh2
+                    curve = self._cubic_bezier_curve(P0, P1, B1, B2, n)
+                    edges.append({'u': u, 'v': v, 'P0': P0, 'P1': P1, 'curve': curve})
+            return edges
+
         cx, cy = float(center[0]), float(center[1])
         xy = np.array([[cx + r * np.cos(th), cy + r * np.sin(th)] for (r, th) in verts])
         edges = []
@@ -438,13 +575,21 @@ def round_trip_report(data, tok, n_max=None, verbose_fail=3):
             if gt is None:
                 continue
             gt = np.asarray(gt, float)
-            # resample rekonstruierte Kurve auf len(gt)
+            # resample rekonstruierte Kurve auf len(gt), dim-generisch (2D oder 3D Kurve)
             c = e['curve']
             ts = np.linspace(0, 1, len(gt))
             src = np.linspace(0, 1, len(c))
-            rec = np.column_stack([np.interp(ts, src, c[:, 0]),
-                                   np.interp(ts, src, c[:, 1])])
-            chord = np.linalg.norm(e['P1'] - e['P0']) + 1e-9
+            rec = np.column_stack([np.interp(ts, src, c[:, j]) for j in range(tok.dim)])
+            chord = np.linalg.norm(e['P1'] - e['P0'])
+            if chord < 1e-6:
+                # Degenerate (near-zero-length) edge -- inherent data artifact
+                # (confirmed present in the tistos set: a handful of collapsed
+                # hex edges), not a tokenizer defect. Any relative-to-chord
+                # metric explodes by construction here (division by ~0), same
+                # documented "Bug 2" as the 2D pipeline's mini-edge outliers
+                # (docs/ho_quad_transformer/06_edge_geometry_study.md) -- skip
+                # from the aggregate instead of letting it swamp mean/max.
+                continue
             geom_rel_errs.append(float(np.max(np.linalg.norm(rec - gt, axis=1)) / chord))
 
         # --- Topologie exakt? (Integer-Vergleich der Face-Indizes) ---
@@ -463,17 +608,23 @@ def round_trip_report(data, tok, n_max=None, verbose_fail=3):
 
         # --- Geometrie: Quantisierungsfehler (in sortierter Reihenfolge) ---
         order = meta['order']
-        for new_i, (r_rec, th_rec) in enumerate(verts):
+        for new_i, vert in enumerate(verts):
+            r_rec, th_rec = vert[0], vert[1]
             old_i = order[new_i]
             r_gt = float(vp[old_i, 0]); th_gt = float(vp[old_i, 1])
             r_err = abs(r_rec - r_gt)
             a_err = _ang_diff(th_rec, th_gt)
             r_err_max = max(r_err_max, r_err)
             ang_err_max = max(ang_err_max, a_err)
-            # kartesischer Fehler (relativ zum Zentrum)
+            # kartesischer Fehler (relativ zum Zentrum); dim=3 zusaetzlich z-Fehler
             x_gt = r_gt * np.cos(th_gt); y_gt = r_gt * np.sin(th_gt)
             x_rc = r_rec * np.cos(th_rec); y_rc = r_rec * np.sin(th_rec)
-            cart_err_max = max(cart_err_max, float(np.hypot(x_rc - x_gt, y_rc - y_gt)))
+            planar_err = float(np.hypot(x_rc - x_gt, y_rc - y_gt))
+            if tok.dim == 3:
+                z_gt = float(vp[old_i, 2]); z_rec = vert[2]
+                cart_err_max = max(cart_err_max, float(np.hypot(planar_err, z_rec - z_gt)))
+            else:
+                cart_err_max = max(cart_err_max, planar_err)
 
     print(f"\n=== Round-trip ueber {n} Meshes ===")
     print(f"Topologie exakt : {topo_ok}/{n}  (fail: {topo_fail})")
@@ -515,9 +666,9 @@ if __name__ == '__main__':
     # FIXE Bounds: Default [0,1]; --fit-bounds misst die Spanne aus dem Set
     r_bounds, tn_bounds = (0.0, 1.0), (0.0, 1.0)
     if args.fit_bounds:
-        r_bounds, tn_bounds = TwoStageTokenizer.fit_bounds(data)
+        r_bounds, tn_bounds = PolytronTokenizer.fit_bounds(data)
 
-    tok = TwoStageTokenizer(quantization_r=args.qr, quantization_a=args.qa,
+    tok = PolytronTokenizer(quantization_r=args.qr, quantization_a=args.qa,
                             max_vertices=max_v + 16, repr_mode=args.mode,
                             r_bounds=r_bounds, tn_bounds=tn_bounds)
     print(f"repr_mode: {args.mode}  ({tok.geom_per_edge} geom-Tokens/Half-Edge)")

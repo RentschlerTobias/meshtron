@@ -19,8 +19,8 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from prototype_twostage import TwoStageTokenizer
-import vertex_head_prototype as vh
+from polytron_tokenizer import PolytronTokenizer
+import polytron_vertex_model as vh
 
 LAB_COLOR = {0: '#d62728', 1: '#ff7f0e', 2: '#7fb3d5'}
 
@@ -75,7 +75,7 @@ def main():
     args = ap.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tok = TwoStageTokenizer(repr_mode='cubic_bezier')
+    tok = PolytronTokenizer(repr_mode='cubic_bezier')
 
     print(f"Lade Modell {args.ckpt} ...")
     ck = torch.load(args.ckpt, weights_only=False, map_location=device)

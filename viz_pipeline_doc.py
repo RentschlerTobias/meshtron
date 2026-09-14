@@ -1,7 +1,7 @@
 """
 viz_pipeline_doc.py
 
-Ausfuehrliche Schritt-fuer-Schritt-Dokumentation der Plan-B-Pipeline (HO-Quad-
+Ausfuehrliche Schritt-fuer-Schritt-Dokumentation der Polytron-Pipeline (HO-Quad-
 Block-Generator). Erzeugt eine Galerie, die jeden Prozessschritt visualisiert:
 
   0  Uebersicht (Punktwolke -> S1 Vertices -> S2 Faces -> S3 Geometrie -> Mesh)
@@ -23,7 +23,7 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-from prototype_twostage import TwoStageTokenizer
+from polytron_tokenizer import PolytronTokenizer
 from augment_subdivide import build_subdivided_mesh
 
 LAB_COLOR = {0: '#d62728', 1: '#ff7f0e', 2: '#7fb3d5'}
@@ -142,7 +142,7 @@ def main():
     ap.add_argument('--outdir', default='figures/pipeline_doc')
     args = ap.parse_args()
 
-    tok = TwoStageTokenizer(repr_mode='cubic_bezier')
+    tok = PolytronTokenizer(repr_mode='cubic_bezier')
     print(f"Lade {args.data} ...")
     data = torch.load(args.data, weights_only=False)
     six = [d for d in data if d['faces'].shape[1] == 6]
@@ -164,7 +164,7 @@ def main():
     for i in range(4):
         ax[i].annotate("", xy=(1.02, 0.5), xytext=(0.98, 0.5), xycoords='axes fraction',
                        arrowprops=dict(arrowstyle='-|>', color='k', lw=1.6))
-    fig.suptitle("Plan B Pipeline: punktwolken-konditionierter HO-Quad-Block-Generator",
+    fig.suptitle("Polytron Pipeline: punktwolken-konditionierter HO-Quad-Block-Generator",
                  fontsize=14, y=1.02)
     fig.tight_layout()
     p = f"{args.outdir}/00_overview.png"; fig.savefig(p, dpi=110, bbox_inches='tight')

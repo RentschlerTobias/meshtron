@@ -2,7 +2,7 @@
 train_pointer.py
 
 Echtes (nicht-overfit) train/val fuer den POINTER-FACE-Kopf (Stufe 2) mit
-Batching + Padding. Skaliert pointer_head_prototype.py von batch=1 auf echte
+Batching + Padding. Skaliert polytron_pointer_model.py von batch=1 auf echte
 Batches ueber den augmentierten Datensatz. Vertices werden als gegeben angenommen
 (Stufe-1-Konditionierung kommt spaeter); getestet wird, ob das Pointer-Netz die
 Face-Topologie GENERALISIERT (val face-exact), nicht nur auswendig lernt.
@@ -28,18 +28,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from prototype_twostage import TwoStageTokenizer
-from pointer_head_prototype import PointerFaceModel, build_examples
+from polytron_tokenizer import PolytronTokenizer
+from polytron_pointer_model import PointerFaceModel, build_examples
 
 PAD_TGT = -1
 
 
 def collate(batch):
-    """Liste von (vert_feats[M,3], ptr[L], faces[F,4]) -> gepolsterte Tensoren."""
+    """Liste von (vert_feats[M,D], ptr[L], faces[F,cpb]) -> gepolsterte Tensoren.
+    D (Vertex-Feature-Breite: 3 fuer dim=2 r/sin/cos, 4 fuer dim=3 +z) wird aus
+    den Daten selbst gelesen statt hartkodiert."""
     Mmax = max(vf.shape[0] for vf, _, _ in batch)
     Lmax = max(p.numel() for _, p, _ in batch)
+    D = batch[0][0].shape[1]
     B = len(batch)
-    vf = torch.zeros(B, Mmax, 3)
+    vf = torch.zeros(B, Mmax, D)
     vpad = torch.ones(B, Mmax, dtype=torch.bool)          # True=Padding
     ptr = torch.full((B, Lmax), PAD_TGT, dtype=torch.long)
     tpad = torch.ones(B, Lmax, dtype=torch.bool)
@@ -138,7 +141,7 @@ def main():
     if args.limit:
         data = data[:args.limit]
     max_v = max(d['vertices_polar'].shape[0] for d in data)
-    tok = TwoStageTokenizer(max_vertices=max_v + 16)
+    tok = PolytronTokenizer(max_vertices=max_v + 16)
     print(f"baue Beispiele aus {len(data)} Meshes ...")
     t0 = time.time()
     examples = build_examples(data, tok)

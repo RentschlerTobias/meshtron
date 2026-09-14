@@ -1,21 +1,31 @@
 """
-vertex_head_prototype.py
+polytron_vertex_model.py
 
-STUFE 1: Punktwolke + AUFLOESUNG n -> Vertices ERZEUGEN (variabel). Konditioniert
-auf die Punktwolke tri_coordinates [Np,3] (x,y in [0,1], Label {0=Ecke,1=Rand,
-2=Feld}) UND das Aufloesungs-Level n (Subdivision-Faktor; Face-Zahl F = 6 n^2)
-generiert das Modell autoregressiv den Vertex-Satz als polar-Tokens (r, sin theta,
-cos theta), kanonische Reihenfolge lexsort(theta, r), variable Laenge via STOP.
+STUFE 1: Punktwolke + Ziel-Anzahl n (roher Face-/Block-Count, siehe unten) ->
+Vertices ERZEUGEN (variabel). Konditioniert auf die Punktwolke tri_coordinates
+[Np,3] (x,y in [0,1], Label {0=Ecke,1=Rand,2=Feld} fuer dim=2; x,y,z fuer dim=3,
+kein Label) UND n generiert das Modell autoregressiv den Vertex-Satz als
+polar/zylindrische Tokens (r, sin theta, cos theta[, z]), kanonische Reihenfolge
+lexsort(theta, r), variable Laenge via STOP.
 
-Warum auf n konditionieren (nicht rohe Face-Zahl): n ist der eigentliche 1-DOF-
-Knopf -- Geometrie kommt aus der Punktwolke, Aufloesung aus n. F=6n^2 ist nur ein
-nichtlinearer Proxy. Kleiner linearer Bereich -> der sinusoidale FaceCountEncoder
-generalisiert sauber und extrapoliert auf n=5,6 (feinere Gitter, nie trainiert).
-Die Punktwolke ist fuer alle Subdivisions DERSELBEN Blade identisch -> ohne n
-waere die Vertex-Zahl mehrdeutig. Konditionierung = FaceCountEncoder(n) als
+Konditionierung auf n = die tatsaechliche Face-/Block-Zahl des Zielmeshs (KEIN
+abgeleitetes "Aufloesungslevel" mehr, siehe unten) = FaceCountEncoder(n) als
 zusaetzliches Memory-Token an die Punkt-Latents konkateniert (Meshtron-Muster).
+Die Punktwolke ist bei mehreren Aufloesungen derselben Geometrie identisch ->
+ohne n waere die Vertex-Zahl mehrdeutig.
 
-  ~/Environments/meshtron/bin/python vertex_head_prototype.py \
+Frueher (F = 6n^2, 6-Block-Vorlage): dieses Modul konditionierte auf ein
+abgeleitetes "Aufloesungslevel" n=1..4 statt auf die rohe Face-Zahl F, ueber
+die feste Tabelle FACECOUNTS=[6,24,54,96]/FC2N={6:1,24:2,54:3,96:4} (F=6n^2).
+Das war spezifisch fuer ein 2D-Experiment mit IMMER genau 6 Basis-Bloecken,
+nur unterschiedlich fein unterteilt -- bei echten (z.B. tistos-3D-) Daten mit
+beliebiger, nicht formelhafter Blockzahl (12..75 im tistos-Satz, siehe Decision-
+Log) filterte `if Fc not in FC2N` schlicht ALLE Meshes heraus. Entfernt:
+`FaceCountEncoder` (faceCount_encoder.py) nimmt ohnehin schon eine rohe Zahl
+entgegen, dieselbe Konditionierung wie Quadtron/MeshtronDomain -- die
+n/FACECOUNTS-Zwischenschicht war unnoetig, nicht strukturell erforderlich.
+
+  ~/Environments/meshtron/bin/python polytron_vertex_model.py \
       [--data domain_data_aug.pt] [--d-model 256] [--batch 64] [--epochs 40]
 """
 
@@ -30,27 +40,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from prototype_twostage import TwoStageTokenizer
+from polytron_tokenizer import PolytronTokenizer
 from faceCount_encoder import FaceCountEncoder
-
-FACECOUNTS = [6, 24, 54, 96]
-FC2N = {6: 1, 24: 2, 54: 3, 96: 4}          # F = 6 n^2  ->  n = sqrt(F/6)
 
 
 # ------------------------------------------------------------------
 # Daten
 # ------------------------------------------------------------------
 def build_vertex_examples(data, tok):
-    """Pro Mesh (F in {6,24,54,96}): pts [Np,3], seq [3M+1] (r,ts,tc)*M + STOP,
-    verts_cart [M,2], center [2], n (Aufloesungs-Level 1..4)."""
+    """Pro Mesh: pts [Np,3], seq [(dim+1)*M+1] (r,ts,tc[,z])*M + STOP,
+    verts_cart [M,dim], center [dim], n = rohe Face-/Block-Zahl (Konditionierung,
+    kein abgeleitetes Level mehr -- siehe Modul-Docstring)."""
     Qr, Qa = tok.Qr, tok.Qa
     off_ts, off_tc = tok.off_ts, tok.off_tc
     STOP = Qr + 2 * Qa + 1
     examples = []
     for d in data:
         Fc = d['faces'].shape[1]
-        if Fc not in FC2N:
-            continue
         vp = d['vertices_polar'].numpy()
         order = tok._sort_order(d['vertices_polar'])
         seq = []
@@ -59,13 +65,16 @@ def build_vertex_examples(data, tok):
             rt = tok._q_scalar(r, tok.R_MIN, tok.R_MAX)
             ts, tc = tok._q_angle(th)
             seq += [rt, ts + off_ts, tc + off_tc]
+            if tok.dim == 3:
+                z = float(vp[oi, 2])
+                seq.append(tok._q_scalar(z, tok.Z_MIN, tok.Z_MAX) + tok.off_r)
         seq.append(STOP)
         examples.append({
             'pts': torch.tensor(d['tri_coordinates'].numpy(), dtype=torch.float32),
             'seq': torch.tensor(seq, dtype=torch.long),
             'vc': d['vertices_cartesian'].numpy()[order],
             'center': d['center'].numpy(),
-            'n': FC2N[Fc], 'fc': Fc})
+            'n': Fc, 'fc': Fc})
     return examples
 
 
@@ -114,20 +123,27 @@ class VertexGen(nn.Module):
 # ------------------------------------------------------------------
 # Gruppen-Maske: Decoder-Position -> erlaubte Token-Gruppe (variable Laenge)
 # ------------------------------------------------------------------
-def group_mask(logits, pos0, Qr, Qa, stop_id):
-    """Ziel an Position pos0 (0-basiert). Gruppe zyklisch (pos0 mod 3): 0=r,1=sin,
-    2=cos. STOP nur zu Beginn eines neuen Tripels (pos0 mod 3 == 0, pos0 > 0)."""
+def group_mask(logits, pos0, Qr, Qa, stop_id, dim=2):
+    """Ziel an Position pos0 (0-basiert). Gruppe zyklisch (pos0 mod group_size):
+    0=r,1=sin,2=cos[,3=z fuer dim=3]. STOP nur zu Beginn einer neuen Gruppe
+    (pos0 mod group_size == 0, pos0 > 0). z teilt sich den r-Skalarbereich
+    [0,Qr) -- dieselbe Konvention wie PolytronTokenizer.tokenize() (siehe
+    off_r-Kommentar dort: r, t_norm und z leben alle im selben Zahlenbereich,
+    nur mit unterschiedlichen Dequantisierungs-Bounds am jeweiligen Aufrufort)."""
+    group_size = 4 if dim == 3 else 3
     V = logits.shape[-1]
     mask = torch.full((V,), float('-inf'), device=logits.device)
-    g = pos0 % 3
+    g = pos0 % group_size
     if g == 0:
         mask[0:Qr] = 0.0
         if pos0 > 0:
             mask[stop_id] = 0.0
     elif g == 1:
         mask[Qr:Qr + Qa] = 0.0
-    else:
+    elif g == 2:
         mask[Qr + Qa:Qr + 2 * Qa] = 0.0
+    else:  # g == 3, nur dim=3: z, teilt sich den r-Bereich
+        mask[0:Qr] = 0.0
     return logits + mask
 
 
@@ -195,39 +211,50 @@ def run_epoch(model, order, examples, bs, opt, sched, clip, device, start_id,
 
 @torch.no_grad()
 def s1_generate(model, pts, n, tok, START, STOP, device, cap=140):
-    """Variable Generierung, konditioniert auf Aufloesung n. Returns polar [Mgen,2]."""
+    """Variable Generierung, konditioniert auf die rohe Ziel-Face-/Block-Zahl n.
+    Returns polar/zylindrisch [Mgen, 2] (dim=2) oder [Mgen, 3] (dim=3, r,th,z)."""
     Qr, Qa = tok.Qr, tok.Qa
+    group_size = 4 if tok.dim == 3 else 3
     pts = pts.unsqueeze(0).to(device)
     ppad = torch.zeros(1, pts.size(1), dtype=torch.bool, device=device)
     nt_ = torch.tensor([n], device=device)
     mem, ppad_ext = model.encode(pts, ppad, nt_)
     maxpos = model.pos.num_embeddings                # Decoder-Input darf pos nicht sprengen
     seq = [START]
-    for step in range(cap * 3):
+    for step in range(cap * group_size):
         if len(seq) >= maxpos:                       # Laenge auf pos-Embedding begrenzen
             break
         din = torch.tensor(seq, device=device)[None]
         logits = model.decode(mem, ppad_ext, din)[0, -1]
-        logits = group_mask(logits, step, Qr, Qa, STOP)
+        logits = group_mask(logits, step, Qr, Qa, STOP, dim=tok.dim)
         nt = int(logits.argmax())
         if nt == STOP:
             break
         seq.append(nt)
     gen = seq[1:]
-    M = len(gen) // 3
-    polar = []
+    M = len(gen) // group_size
+    out = []
     for m in range(M):
-        r = tok._dq_scalar(gen[3 * m], tok.R_MIN, tok.R_MAX)
-        th = tok._dq_angle(gen[3 * m + 1] - Qr, gen[3 * m + 2] - (Qr + Qa))
-        polar.append((r, th))
-    return np.array(polar).reshape(-1, 2)
+        base = m * group_size
+        r = tok._dq_scalar(gen[base], tok.R_MIN, tok.R_MAX)
+        th = tok._dq_angle(gen[base + 1] - Qr, gen[base + 2] - (Qr + Qa))
+        if tok.dim == 3:
+            z = tok._dq_scalar(gen[base + 3], tok.Z_MIN, tok.Z_MAX)
+            out.append((r, th, z))
+        else:
+            out.append((r, th))
+    return np.array(out).reshape(-1, group_size - 1)
 
 
 @torch.no_grad()
 def vertex_eval(model, examples, ids, device, tok, START, STOP):
-    """Free-Run: Vertexzahl korrekt? + Vertex-Fehler (bei korrekter Zahl), je Facecount."""
+    """Free-Run: Vertexzahl korrekt? + Vertex-Fehler (bei korrekter Zahl), je
+    Facecount -- Buckets werden aus den tatsaechlich evaluierten `ids` bestimmt
+    (frueher: feste FACECOUNTS-Liste, siehe Modul-Docstring fuer warum das mit
+    beliebigen/nicht-templated Blockzahlen nicht mehr passt)."""
     model.eval()
-    per = {f: {'n': 0, 'count_ok': 0, 'errs': []} for f in FACECOUNTS}
+    facecounts = sorted({examples[i]['fc'] for i in ids})
+    per = {f: {'n': 0, 'count_ok': 0, 'errs': []} for f in facecounts}
     for i in ids:
         e = examples[i]; fc = e['fc']
         polar = s1_generate(model, e['pts'], e['n'], tok, START, STOP, device)
@@ -235,15 +262,21 @@ def vertex_eval(model, examples, ids, device, tok, START, STOP):
         per[fc]['n'] += 1
         if polar.shape[0] == Mgt:
             per[fc]['count_ok'] += 1
-            rec = np.stack([polar[:, 0] * np.cos(polar[:, 1]),
-                            polar[:, 0] * np.sin(polar[:, 1])], 1) + e['center'][None]
-            per[fc]['errs'].append(np.linalg.norm(rec - e['vc'], axis=1) / math.sqrt(2))
+            if tok.dim == 3:
+                rec = np.stack([polar[:, 0] * np.cos(polar[:, 1]),
+                                polar[:, 0] * np.sin(polar[:, 1]), polar[:, 2]], 1) + e['center'][None]
+                norm = math.sqrt(3)
+            else:
+                rec = np.stack([polar[:, 0] * np.cos(polar[:, 1]),
+                                polar[:, 0] * np.sin(polar[:, 1])], 1) + e['center'][None]
+                norm = math.sqrt(2)
+            per[fc]['errs'].append(np.linalg.norm(rec - e['vc'], axis=1) / norm)
     return per
 
 
 def fmt_eval(per):
     out = []
-    for f in FACECOUNTS:
+    for f in sorted(per):
         p = per[f]
         if p['n'] == 0:
             continue
@@ -260,6 +293,9 @@ def fmt_eval(per):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default='domain_data_aug.pt')
+    ap.add_argument('--dim', type=int, default=2, choices=[2, 3])
+    ap.add_argument('--corners-per-block', type=int, default=4,
+                    help='4 = 2D-Quad, 8 = 3D-Hex-Block.')
     ap.add_argument('--d-model', type=int, default=256)
     ap.add_argument('--n-enc', type=int, default=4)
     ap.add_argument('--n-dec', type=int, default=4)
@@ -281,7 +317,8 @@ def main():
 
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tok = TwoStageTokenizer(repr_mode='cubic_bezier')
+    tok = PolytronTokenizer(repr_mode='cubic_bezier', dim=args.dim,
+                            corners_per_block=args.corners_per_block)
     Qr, Qa = tok.Qr, tok.Qa
     START = Qr + 2 * Qa; STOP = Qr + 2 * Qa + 1; PAD = Qr + 2 * Qa + 2
     vocab = Qr + 2 * Qa + 3
@@ -290,7 +327,7 @@ def main():
     data = torch.load(args.data, weights_only=False)
     if args.limit:
         data = data[:args.limit]
-    print("baue Vertex-Beispiele (alle Facecounts) ...")
+    print("baue Vertex-Beispiele (alle Facecounts, keine Vorlagen-Filterung mehr) ...")
     t0 = time.time()
     examples = build_vertex_examples(data, tok)
     from collections import Counter
@@ -299,6 +336,8 @@ def main():
     print(f"{len(examples)} Beispiele in {time.time()-t0:.0f}s  |  facecounts "
           f"{dict(sorted(fc_dist.items()))}  |  seq {min(Ls)}..{max(Ls)}  vocab {vocab}")
     max_len = max(Ls) + 1
+    max_fc = max(fc_dist)  # Konditionierungs-Obergrenze fuer FaceCountEncoder,
+                            # aus den tatsaechlichen Daten statt einer festen Vorlage
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(len(examples))
@@ -307,7 +346,7 @@ def main():
     print(f"split: {len(train_ids)} train / {len(val_ids)} val")
 
     model = VertexGen(vocab, d=args.d_model, n_enc=args.n_enc, n_dec=args.n_dec,
-                      max_len=max_len, start_id=START).to(device)
+                      max_len=max_len, start_id=START, res_max=max_fc).to(device)
     n_par = sum(p.numel() for p in model.parameters())
     print(f"VertexGen d={args.d_model} enc={args.n_enc} dec={args.n_dec}  "
           f"Params {n_par/1e6:.2f}M  device={device}")
@@ -334,7 +373,7 @@ def main():
         torch.save({'model': model.state_dict(), 'd_model': args.d_model,
                     'n_enc': args.n_enc, 'n_dec': args.n_dec, 'vocab': vocab,
                     'start': START, 'stop': STOP, 'pad': PAD, 'max_len': max_len,
-                    'facecounts': FACECOUNTS, 'kind': 'vertex',
+                    'facecounts': sorted(fc_dist), 'kind': 'vertex',
                     'epoch': tag_ep, 'val_loss': tag_val}, args.save)
 
     if device == 'cuda':

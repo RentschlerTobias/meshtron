@@ -1,7 +1,7 @@
 """
 train_smoke.py
 
-Smoke-Training: kleiner decoder-only GPT ueber die TwoStageTokenizer-Sequenzen
+Smoke-Training: kleiner decoder-only GPT ueber die PolytronTokenizer-Sequenzen
 (flaches Vocab, Pointer-Indizes als normale Tokens). Testet, ob der Transformer die
 Mesh-Token-Struktur ueberhaupt lernt (Loss faellt, Next-Token-Accuracy steigt) und
 misst den VRAM-Footprint. NICHT der finale Pointer-Kopf — reiner Funktions-Smoke.
@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from prototype_twostage import TwoStageTokenizer
+from polytron_tokenizer import PolytronTokenizer
 
 
 class Block(nn.Module):
@@ -88,7 +88,7 @@ def main():
     args = ap.parse_args()
 
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tok = TwoStageTokenizer(repr_mode='cubic_bezier')
+    tok = PolytronTokenizer(repr_mode='cubic_bezier')
     pad_id = 3076
     vocab = 3078
 

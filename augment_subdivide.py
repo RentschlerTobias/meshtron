@@ -147,9 +147,9 @@ def _dedup_points(pts, tol=DEDUP_TOL):
 
 def _curve_tangents(curve):
     """Hermite-Tangenten (alpha,tn) an beiden Enden via cubic-Bezier-Fit -> [4]."""
-    from prototype_twostage import TwoStageTokenizer
+    from polytron_tokenizer import PolytronTokenizer
     P0, P1 = curve[0], curve[-1]
-    B1, B2 = TwoStageTokenizer._fit_cubic_bezier(P0, P1, curve)
+    B1, B2 = PolytronTokenizer._fit_cubic_bezier(P0, P1, curve)
     T0 = 3.0 * (B1 - P0); T1 = 3.0 * (P1 - B2)
     return np.array([np.arctan2(T0[1], T0[0]), np.linalg.norm(T0),
                      np.arctan2(T1[1], T1[0]), np.linalg.norm(T1)], dtype=np.float32)

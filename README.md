@@ -17,11 +17,12 @@ Polytron is deliberately standalone: `polytron_tokenizer.py` and the
 `polytron_*_model.py` heads do not touch Quadtron's tokenizer classes, so the
 two pipelines keep working unchanged independently.
 
-**MeshtronDomain** (`meshtron_domain.py`, `tokenizer_domain.py`,
-`train_domain.py`, `domain_trainer.py`, `dataset_domain.py`,
-`inference_domain.py`, `domain_embedding.py`, and the `plot_domain_*.py`
-scripts) is **deprecated**: a failed experiment (severe overfitting, invalid
-generated output — see
+**MeshtronDomain** (`deprecated/meshtron_domain.py`,
+`deprecated/tokenizer_domain.py`, `deprecated/train_domain.py`,
+`deprecated/domain_trainer.py`, `deprecated/dataset_domain.py`,
+`deprecated/inference_domain.py`, `deprecated/domain_embedding.py`, and the
+`deprecated/plot_domain_*.py` scripts) is **deprecated**: a failed experiment
+(severe overfitting, invalid generated output — see
 `docs/ho_quad_transformer/01_current_model_and_diagnosis.md`) that motivated
 building Polytron as the structural fix. Kept in the repo for reference, not
 maintained or extended; each of those files carries a `DEPRECATED` note at the
@@ -82,10 +83,33 @@ and the entry points expect the files next to the scripts:
 | `domain_data_aug.pt` | `polytron_chain.py` | `--data` |
 | `meta_mesh.pt` | `testing.py` | -- |
 
-(`domain_data_10k.pt` / `train_domain.py` was MeshtronDomain-only; deprecated, see above.)
+(`domain_data_10k.pt` / `deprecated/train_domain.py` was MeshtronDomain-only; deprecated, see above.)
 
 Point `--data-path` at wherever you keep them, or drop them into the working
 directory before starting a run.
+
+## Directory layout
+
+The core pipeline (config, trainer, both model families, tokenizers, shared
+backbone modules) stays flat at the repo root — everything there imports
+everything else directly, matching the "run scripts directly" convention
+above. Three groups of standalone, non-imported-by-the-core scripts are
+split into subfolders to keep the root navigable; each moved file has a
+`sys.path.insert(0, str(Path(__file__).resolve().parent.parent))` shim at
+the top so `python <subfolder>/<script>.py` still works from anywhere
+without a `PYTHONPATH` workaround:
+
+- `deprecated/` — the MeshtronDomain family (see above).
+- `analysis/` — sorting-strategy sweep/comparison/aggregation scripts
+  (`sweep.py`, `compare_sorting.py`, `compare_strategies.py`,
+  `run_full_optimization.py`, `analyze_sorting.py`, `param_test.py`,
+  `check_data.py`, `extract_10k.py`, `export_augmented.py`).
+- `viz/` — standalone visualization scripts
+  (`viz_gen_meshes.py`, `viz_twostage.py`, `viz_pipeline_doc.py`,
+  `viz_augment_gallery.py`, `viz_blockstruct.py`, `viz_outliers.py`,
+  `viz_reps.py`, `viz_pointcloud_mesh.py`, `plot_training.py`,
+  `visualize_paper.py`, `visualize_tokenizer.py`,
+  `visualize_tokenizer_v2.py`).
 
 ## Module layout
 

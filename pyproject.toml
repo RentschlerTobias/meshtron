@@ -16,6 +16,7 @@ dependencies = [
     "seaborn>=0.13",
     "optuna>=4.0",
     "gmsh>=4.15",
+    "textual>=8.2.8",
 ]
 
 # openmesh braucht Kompilierung (C++), nur von den half_edge-Modulen genutzt, NICHT

@@ -1,6 +1,9 @@
 """
 domain_embedding.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron). Kept for reference only, not maintained or extended.
+
 Embedding-Layer fuer Domain-Partition Tokenizer.
 Unterstuetzt 3 Modi:
   0: Split vocab ranges (ein nn.Embedding)

@@ -1,6 +1,9 @@
 """
 dataset_domain.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron). Kept for reference only, not maintained or extended.
+
 Dataset für Domain-Partition Training (kompatibel mit tokenizer-sorting Trainer).
 Ladt vorverarbeitete Daten (domain_data.pt) und tokenisiert sie.
 """

@@ -1,6 +1,9 @@
 """
 inference_domain.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron). Kept for reference only, not maintained or extended.
+
 Inference / Generation für Domain-Partition Meshtron.
 Autoregressive Generierung + Hermite-Spline Rekonstruktion + Transfinite Interpolation.
 """

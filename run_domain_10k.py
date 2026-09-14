@@ -1,6 +1,9 @@
 """
 run_domain_10k.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron). Kept for reference only, not maintained or extended.
+
 Launcher fuer die Phase-0-Baseline: MeshtronDomain auf dem vollen 10k-Datensatz
 (domain_data_10k.pt) neu trainieren. Nutzt DomainTrainer + DomainTrainingConfig.
 

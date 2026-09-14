@@ -1,6 +1,10 @@
 """
 plot_domain_pipeline.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron / viz_twostage.py, viz_pipeline_doc.py). Kept for reference only, not
+maintained or extended.
+
 Visualisiert die komplette Domain-Partition Pipeline in einem Figure-Grid:
   1. Eingabe: Point Cloud + Blocking Nodes + Streamlines
   2. Polar Plot: Vertices in Polarkoordinaten

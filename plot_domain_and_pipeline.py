@@ -1,4 +1,10 @@
 """
+plot_domain_and_pipeline.py
+
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron / viz_twostage.py, viz_pipeline_doc.py). Kept for reference only, not
+maintained or extended.
+
 Plot: Domain data + Tokenize -> Detokenize -> Hermite Spline pipeline
 """
 import os

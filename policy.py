@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 
 class Policy(nn.Module):
-    """Duenner Wrapper um Meshtron, der Trainings- und Sampling-Pfad trennt.
+    """Duenner Wrapper um ein Sequenzmodell (Quadtron/Polytron), der Trainings- und Sampling-Pfad trennt.
 
     Heute nutzt der Trainer nur `logits()` (Teacher Forcing).
     `sample()` ist fuer eine spaetere RL-Phase vorbereitet, in der ganze

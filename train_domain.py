@@ -1,6 +1,12 @@
 """
 train_domain.py
 
+DEPRECATED: MeshtronDomain was a failed experiment, superseded by Polytron
+(polytron_chain.py). Kept for reference only, not maintained or extended — the
+import below is stale (DomainData/get_loaders don't exist in dataset_domain.py
+any more, see DomainMeshData/get_domain_loaders) and was left as-is rather than
+fixed, since this file is not on the active path.
+
 Trainingsskript fuer MeshtronDomain.
 """
 

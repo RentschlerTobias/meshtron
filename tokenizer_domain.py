@@ -1,6 +1,10 @@
 """
 tokenizer_domain.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron / polytron_tokenizer.py). Kept for reference only, not maintained or
+extended.
+
 Tokenizer fuer Domain-Partitionen mit gekruemmten Kanten.
 
 Features:

@@ -1,6 +1,10 @@
 """
 domain_trainer.py
 
+DEPRECATED: part of the MeshtronDomain family (failed experiment, superseded by
+Polytron / polytron_chain.py). Kept for reference only, not maintained or
+extended.
+
 Moderner Trainer fuer Domain-Partition Meshtron.
 API-kompatibel mit trainer.py (tokenizer-sorting Branch).
 """

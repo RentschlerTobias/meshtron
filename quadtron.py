@@ -1,5 +1,4 @@
 
-from tokenizer import Tokenizer2D
 from embedding import Embedding
 
 from typing import Optional, Tuple, Dict
@@ -14,9 +13,10 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 
-class Meshtron(nn.Module):
+class Quadtron(nn.Module):
     """
-    Vollständiges Modell mit allen Komponenten
+    Quadtron: rohe Quad-Faces, row-encoded Tokenization (tokenizer_v2.Tokenizer2D).
+    Punktwolke + Face-Count -> flache Quad-Token-Sequenz.
     """
 
     def __init__(self,
@@ -32,6 +32,8 @@ class Meshtron(nn.Module):
                                      int, int] = (4, 8, 12, 16, 20),
                  dropout: float = 0.1,
                  ffn_mult: int = 4,
+                 use_flash_attention: bool = False,
+                 sliding_window_size: int = 0,
                  verbose=True):
         super().__init__()
 
@@ -71,7 +73,9 @@ class Meshtron(nn.Module):
             stage_layers=stage_layers,
             d_ff=ffn_mult * d_model,
             dropout=dropout,
-            max_position=max_seq_length
+            max_position=max_seq_length,
+            use_flash_attention=use_flash_attention,
+            sliding_window_size=sliding_window_size,
         )
 
         # Output Head - projiziert zurück auf Vocab Size

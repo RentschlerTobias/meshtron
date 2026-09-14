@@ -35,7 +35,7 @@ from pathlib import Path
 
 import torch
 
-from config import TrainingConfig
+from config import PipelineConfig
 from trainer import Trainer
 
 
@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def run_one(base: TrainingConfig, seed: int, strategy: int,
+def run_one(base: PipelineConfig, seed: int, strategy: int,
             trial_epochs: int | None, log_dir: str | None,
             batch_size: int | None, scenario: str) -> dict:
     overrides: dict = {
@@ -82,7 +82,7 @@ def run_one(base: TrainingConfig, seed: int, strategy: int,
         overrides["log_dir"] = log_dir
     if batch_size is not None:
         overrides["batch_size"] = batch_size
-    cfg = TrainingConfig.from_dict(overrides)
+    cfg = PipelineConfig.from_dict(overrides)
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -152,7 +152,7 @@ def _append_row(summary_path: Path, row: dict) -> None:
 
 def main() -> None:
     args = parse_args()
-    base = TrainingConfig.from_dict(json.loads(args.base_config.read_text()))
+    base = PipelineConfig.from_dict(json.loads(args.base_config.read_text()))
 
     seeds = [args.seed] if args.seed is not None else list(args.seeds)
     strategies = [args.strategy] if args.strategy is not None else list(args.strategies)

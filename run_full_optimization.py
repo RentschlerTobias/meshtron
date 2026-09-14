@@ -24,17 +24,17 @@ import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 
-from config import TrainingConfig
+from config import PipelineConfig
 from metrics import EpochMetrics
 from trainer import Trainer
 
 
 def convert_optuna_params_to_config(params: dict) -> dict:
-    """Convert Optuna's stage_a params (n_stages, layer_{i}) to TrainingConfig stage_layers.
+    """Convert Optuna's stage_a params (n_stages, layer_{i}) to PipelineConfig stage_layers.
 
     Optuna returns n_stages and layer_0, layer_1, ... as separate parameters.
-    TrainingConfig uses a single stage_layers tuple where len(tuple) = n_stages.
-    This function converts from the Optuna format to the TrainingConfig format.
+    PipelineConfig uses a single stage_layers tuple where len(tuple) = n_stages.
+    This function converts from the Optuna format to the PipelineConfig format.
     """
     if "n_stages" not in params:
         return params
@@ -72,16 +72,16 @@ def is_stage_complete(study_name: str, storage_path: Path, n_trials: int) -> tup
     return False, None
 
 
-def load_best_config_from_dbs(sorting_strategy: int, storage_path: Path) -> TrainingConfig | None:
-    """Reconstruct best TrainingConfig from all three stage databases.
+def load_best_config_from_dbs(sorting_strategy: int, storage_path: Path) -> PipelineConfig | None:
+    """Reconstruct best PipelineConfig from all three stage databases.
 
     This is useful when a run crashed and we need to recover the best config
     from the existing Optuna databases.
 
     Returns:
-        TrainingConfig with params from all completed stages, or None if any stage is missing.
+        PipelineConfig with params from all completed stages, or None if any stage is missing.
     """
-    base = TrainingConfig()
+    base = PipelineConfig()
     best_params_per_stage = {}
 
     for stage in STAGES:
@@ -115,7 +115,7 @@ def load_best_config_from_dbs(sorting_strategy: int, storage_path: Path) -> Trai
         "sorting_strategy": sorting_strategy,
     }
 
-    return TrainingConfig.from_dict(config_dict)
+    return PipelineConfig.from_dict(config_dict)
 
 
 SORTING_METHODS = [0, 1, 3]
@@ -153,10 +153,10 @@ def _make_on_epoch(trial: optuna.Trial):
     return on_epoch
 
 
-def _run_trial(trial: optuna.Trial, cfg: TrainingConfig, log_dir: Path) -> float:
+def _run_trial(trial: optuna.Trial, cfg: PipelineConfig, log_dir: Path) -> float:
     cfg_dict = {**cfg.to_dict(), "log_dir": str(log_dir),
                 "save_best": False, "save_last": False}
-    trial_cfg = TrainingConfig.from_dict(cfg_dict)
+    trial_cfg = PipelineConfig.from_dict(cfg_dict)
     trainer = Trainer(trial_cfg)
     trial.set_user_attr("config_hash", trial_cfg.hash())
     trial.set_user_attr("run_dir", str(trainer.logger.run_dir))
@@ -166,7 +166,7 @@ def _run_trial(trial: optuna.Trial, cfg: TrainingConfig, log_dir: Path) -> float
     return result.best_val_bpt
 
 
-def stage_a_objective(trial: optuna.Trial, base: TrainingConfig, log_dir: Path) -> float:
+def stage_a_objective(trial: optuna.Trial, base: PipelineConfig, log_dir: Path) -> float:
     d_model = trial.suggest_categorical("d_model", [128, 256, 384, 512])
     n_heads = max(1, d_model // 64)
     n_stages = trial.suggest_int("n_stages", 3, 5)
@@ -180,11 +180,11 @@ def stage_a_objective(trial: optuna.Trial, base: TrainingConfig, log_dir: Path) 
         stage_layers=tuple(int(l) for l in layers),
         n_latents=int(n_latents),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg, log_dir)
 
 
-def stage_b_objective(trial: optuna.Trial, base: TrainingConfig, log_dir: Path) -> float:
+def stage_b_objective(trial: optuna.Trial, base: PipelineConfig, log_dir: Path) -> float:
     overrides = dict(
         learning_rate=trial.suggest_float(
             "learning_rate", 1e-5, 1e-3, log=True),
@@ -192,11 +192,11 @@ def stage_b_objective(trial: optuna.Trial, base: TrainingConfig, log_dir: Path) 
         dropout=trial.suggest_float("dropout", 0.0, 0.3),
         weight_decay=trial.suggest_float("weight_decay", 0.0, 0.1),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg, log_dir)
 
 
-def stage_c_objective(trial: optuna.Trial, base: TrainingConfig, log_dir: Path) -> float:
+def stage_c_objective(trial: optuna.Trial, base: PipelineConfig, log_dir: Path) -> float:
     overrides = dict(
         batch_size=trial.suggest_categorical(
             "batch_size", [8, 16, 24]),
@@ -205,7 +205,7 @@ def stage_c_objective(trial: optuna.Trial, base: TrainingConfig, log_dir: Path) 
         learning_rate=trial.suggest_float(
             "learning_rate", 1e-5, 5e-4, log=True),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg, log_dir)
 
 
@@ -219,7 +219,7 @@ STAGE_OBJECTIVES = {
 def run_stage_optimization(
     sorting_strategy: int,
     stage: str,
-    base_config: TrainingConfig,
+    base_config: PipelineConfig,
     storage_path: Path,
     study_name: str,
     n_trials: int,
@@ -230,7 +230,7 @@ def run_stage_optimization(
     log_dir = storage_path / f"logs_{study_name}"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    base = TrainingConfig.from_dict({
+    base = PipelineConfig.from_dict({
         **base_config.to_dict(),
         "sorting_strategy": sorting_strategy,
         "num_epochs": n_epochs,
@@ -296,7 +296,7 @@ def run_stage_optimization(
 
 
 def train_with_seeds(
-    config: TrainingConfig,
+    config: PipelineConfig,
     seeds: list[int],
     output_dir: Path,
 ) -> list[dict]:
@@ -304,7 +304,7 @@ def train_with_seeds(
     for seed in seeds:
         cfg_dict = {**config.to_dict(), "seed": seed,
                     "save_best": True, "save_last": True}
-        cfg = TrainingConfig.from_dict(cfg_dict)
+        cfg = PipelineConfig.from_dict(cfg_dict)
 
         run_dir = output_dir / f"seed_{seed}"
         trainer = Trainer(cfg)
@@ -324,7 +324,7 @@ def train_with_seeds(
 
 
 def run_final_comparison(
-    best_configs: dict[int, TrainingConfig],
+    best_configs: dict[int, PipelineConfig],
     storage_path: Path,
     n_seeds: int = 3,
 ) -> dict:
@@ -436,7 +436,7 @@ def main():
     print(f"Sorting methods: {args.sorting_methods}")
     print(f"Parallel trials: {args.parallel_trials}")
 
-    base_config = TrainingConfig()
+    base_config = PipelineConfig()
     best_configs = {}
 
     all_summaries = []
@@ -543,14 +543,14 @@ def main():
                 converted_params = convert_optuna_params_to_config(
                     dict(best_params))
                 if stage == "a":
-                    best_configs[sorting_strategy] = TrainingConfig.from_dict({
+                    best_configs[sorting_strategy] = PipelineConfig.from_dict({
                         **base_config.to_dict(),
                         **converted_params,
                         "sorting_strategy": sorting_strategy,
                     })
                 else:
                     current = best_configs[sorting_strategy]
-                    best_configs[sorting_strategy] = TrainingConfig.from_dict({
+                    best_configs[sorting_strategy] = PipelineConfig.from_dict({
                         **current.to_dict(),
                         **converted_params,
                     })

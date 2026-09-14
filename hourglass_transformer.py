@@ -10,10 +10,14 @@ from attention import MultiHeadAttention
 
 
 class HourglassTransformerBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.2, max_position: Optional[int] = 1000):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.2,
+                 max_position: Optional[int] = 1000, use_flash_attention: bool = False,
+                 sliding_window_size: int = 0):
         super().__init__()
         self.attention = MultiHeadAttention(
-            d_model, n_heads, dropout=dropout, max_position=max_position)
+            d_model, n_heads, dropout=dropout, max_position=max_position,
+            use_flash_attention=use_flash_attention)
+        self.sliding_window_size = sliding_window_size
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
 
@@ -40,18 +44,35 @@ class HourglassTransformerBlock(nn.Module):
         return x
 
     def _causal_mask(self, seq_len, device):
-        mask = torch.triu(torch.ones(
-            (seq_len, seq_len), device=device), diagonal=1)
-        mask = mask.masked_fill(mask == 1, float('-inf'))
-        mask = mask.masked_fill(mask == 0, 0.0)
+        """Standard causal mask; additionally blocks positions more than
+        `sliding_window_size` tokens in the past when set (>0). 0 (default) =
+        full causal attention, unchanged from before this flag existed.
+
+        Built as a boolean OR of two independent conditions, then converted to
+        an additive float mask in one shot -- doing this via two sequential
+        `masked_fill(mask <cond>, -inf)` calls on the same tensor is a trap:
+        after the first call sets some entries to -inf, a second threshold
+        check like `mask <= 0` re-matches those -inf entries and overwrites
+        them back to 0.
+        """
+        blocked = torch.triu(torch.ones(
+            (seq_len, seq_len), device=device, dtype=torch.bool), diagonal=1)
+        if self.sliding_window_size and self.sliding_window_size > 0:
+            blocked = blocked | torch.tril(
+                torch.ones((seq_len, seq_len), device=device, dtype=torch.bool),
+                diagonal=-self.sliding_window_size)
+        mask = torch.zeros((seq_len, seq_len), device=device)
+        mask = mask.masked_fill(blocked, float('-inf'))
         return mask
 
 
 class CrossAttentionCondition(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1, max_position: Optional[int] = None):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1,
+                 max_position: Optional[int] = None, use_flash_attention: bool = False):
         super().__init__()
         self.attention = MultiHeadAttention(
-            d_model, n_heads, dropout=dropout, is_cross_attention=True, max_position=max_position)
+            d_model, n_heads, dropout=dropout, is_cross_attention=True, max_position=max_position,
+            use_flash_attention=use_flash_attention)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
 
@@ -73,11 +94,15 @@ class CrossAttentionCondition(nn.Module):
 
 
 class HourglassStage(nn.Module):
-    def __init__(self, n_layers: int, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1, max_position: Optional[int] = None):
+    def __init__(self, n_layers: int, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1,
+                 max_position: Optional[int] = None, use_flash_attention: bool = False,
+                 sliding_window_size: int = 0):
         super().__init__()
         self.layers = nn.ModuleList([
             HourglassTransformerBlock(
-                d_model, n_heads, d_ff, dropout, max_position)
+                d_model, n_heads, d_ff, dropout, max_position,
+                use_flash_attention=use_flash_attention,
+                sliding_window_size=sliding_window_size)
             for _ in range(n_layers)
         ])
 
@@ -101,18 +126,23 @@ class HourglassTransformer(nn.Module):
         stage_layers: Tuple[int, int, int, int, int] = (4, 8, 12, 16, 20),
         d_ff: int = 2048,
         dropout: float = 0.1,
-        max_position: Optional[int] = None
+        max_position: Optional[int] = None,
+        use_flash_attention: bool = False,
+        sliding_window_size: int = 0,
     ):
         super().__init__()
         self.d_model = d_model
 
         self.stages = nn.ModuleList([
-            HourglassStage(n, d_model, n_heads, d_ff, dropout, max_position)
+            HourglassStage(n, d_model, n_heads, d_ff, dropout, max_position,
+                           use_flash_attention=use_flash_attention,
+                           sliding_window_size=sliding_window_size)
             for n in stage_layers
         ])
         self.conditioners = nn.ModuleList([
             CrossAttentionCondition(
-                d_model, n_heads, d_ff, dropout, max_position)
+                d_model, n_heads, d_ff, dropout, max_position,
+                use_flash_attention=use_flash_attention)
             for _ in stage_layers
         ])
 

@@ -8,18 +8,23 @@ from tqdm import tqdm
 class MeshData(Dataset):
 
     """
-    Dataset für Meshtron 
+    Dataset für Quadtron
     """
 
-    def __init__(self, meshes, tokenizer, max_seq_length=None, n_sample_points=1000, verbose=True, boundary_points_only=False):
+    def __init__(self, meshes, tokenizer, max_seq_length=None, n_sample_points=1000, verbose=True, boundary_points_only=False, dim=2):
         """
-        meshes: Liste von Mesh-Objekten 
+        meshes: Liste von Mesh-Objekten
         tokenizer:  Tokenizer2D
         max_seq_length: Maximale Sequenzlänge (für Padding)
+        dim: 2 oder 3 -- muss zu tokenizer.dim passen. Fuer dim=3 wird, falls vorhanden,
+             mesh.dir_class an tokenizer.tokenize() durchgereicht (Row-Gruppierung, siehe
+             Tokenizer2D._order_quads_by_dir_class).
         """
+        assert dim == tokenizer.dim, f"dataset dim={dim} != tokenizer.dim={tokenizer.dim}"
         self.meshes = meshes
         self.tokenizer = tokenizer
         self.n_sample_points = n_sample_points
+        self.dim = dim
         self.data = []
         self.face_count = []
         self.boundary_points_only = boundary_points_only
@@ -27,10 +32,11 @@ class MeshData(Dataset):
             print(f"start tokenizing")
         for i in tqdm(range(len(meshes)), desc="meshes"):
             mesh = meshes[i]
-            vertices = mesh.x[:, 0:2]  # 2D vertices
+            vertices = mesh.x[:, 0:dim]
             faces = mesh.faces
+            dir_class = getattr(mesh, 'dir_class', None) if dim == 3 else None
 
-            tokens = tokenizer.tokenize(vertices, faces)
+            tokens = tokenizer.tokenize(vertices, faces, dir_class)
             num_faces = faces.size(1)
 
             self.data.append(tokens)
@@ -47,10 +53,24 @@ class MeshData(Dataset):
             f"\nMax Sequenzlänge: {self.max_seq_length}\nMin Sequenzlänge: {self.min_seq_length}")
 
     def get_point_cloud(self, mesh, n_sample_points):
-        all_coords = mesh.tri_coordinates[:, 0:2]
+        dim = self.dim
+        all_coords = mesh.tri_coordinates[:, 0:dim]
         center = (all_coords.max(dim=0).values + all_coords.min(dim=0).values) / 2
-        # uniform scale (same for x and y) um Aspektverhältnis zu erhalten
+        # uniform scale (same across axes) um Aspektverhältnis zu erhalten
         scale = (all_coords.max(dim=0).values - all_coords.min(dim=0).values).max().clamp(min=1e-6)
+
+        if dim == 3:
+            # 3D-Punktwolken (tistos surface_points) sind bereits die volle Oberflaeche --
+            # kein Box/NACA-Loch-Split, kein Rejection-Sampling noetig. Nur sub-/upsamplen.
+            n_points = all_coords.size(0)
+            if n_points >= n_sample_points:
+                idx = torch.randint(0, n_points, [n_sample_points])
+                point_cloud = all_coords[idx, :]
+            else:
+                reps = (n_sample_points + n_points - 1) // n_points
+                point_cloud = all_coords.repeat(reps, 1)[:n_sample_points]
+            point_cloud = (point_cloud - center) / scale * 2
+            return point_cloud
 
         mask = mesh.tri_coordinates[:, 2] != 2
         boundary_points = mesh.tri_coordinates[mask, 0:2]

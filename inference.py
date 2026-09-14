@@ -1,4 +1,4 @@
-"""Standalone inference / generation for a trained Meshtron run.
+"""Standalone inference / generation for a trained Quadtron run.
 
 Usage:
     python inference.py --run-dir runs/<config-hash>
@@ -19,15 +19,15 @@ import torch
 from torch_geometric.data import Data
 
 import plotting_tools
-from config import TrainingConfig
+from config import PipelineConfig
 from dataset import MeshData
-from meshtron import Meshtron
+from quadtron import Quadtron
 from policy import Policy
 from tokenizer_v2 import Tokenizer2D
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Meshtron inference / generation.")
+    p = argparse.ArgumentParser(description="Quadtron inference / generation.")
     p.add_argument("--run-dir", type=Path, required=True,
                    help="Run directory, e.g. runs/<config-hash>.")
     p.add_argument("--ckpt", type=str, default="best.pt",
@@ -47,32 +47,35 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_run(run_dir: Path, ckpt_name: str, device: torch.device) -> Tuple[Meshtron, Policy, TrainingConfig, dict, Tokenizer2D]:
+def load_run(run_dir: Path, ckpt_name: str, device: torch.device) -> Tuple[Quadtron, Policy, PipelineConfig, dict, Tokenizer2D]:
     ckpt_path = run_dir / ckpt_name
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    cfg = TrainingConfig.from_dict(ckpt["config"])
+    cfg = PipelineConfig.from_dict(ckpt["config"])
 
     tokenizer = Tokenizer2D(
         quantization_levels=cfg.quantization,
         verbose=False,
         sorting_strategy=cfg.sorting_strategy,
+        dim=cfg.dim,
     )
 
-    model = Meshtron(
+    model = Quadtron(
         vocab_size=tokenizer.vocab_size,
         d_model=cfg.d_model,
         max_seq_length=ckpt["max_seq_length"],
         n_latents=cfg.n_latents,
-        input_dim=2,
+        input_dim=cfg.dim,
         min_face_count=ckpt["min_face_count"],
         max_face_count=ckpt["max_face_count"],
         n_heads=cfg.n_heads,
         stage_layers=tuple(cfg.stage_layers),
         dropout=cfg.dropout,
         ffn_mult=cfg.ffn_mult,
+        use_flash_attention=cfg.use_flash_attention,
+        sliding_window_size=cfg.sliding_window_size,
         verbose=False,
     ).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -113,6 +116,7 @@ def main() -> None:
         meshes, tokenizer,
         n_sample_points=n_sample_points,
         verbose=False,
+        dim=cfg.dim,
     )
 
     summary = {
@@ -131,7 +135,7 @@ def main() -> None:
 
         print(f"\n=== Mesh {i}: {face_count} faces ===")
 
-        true_tokens = tokenizer.tokenize(mesh.x[:, 0:2], mesh.faces)
+        true_tokens = tokenizer.tokenize(mesh.x[:, 0:cfg.dim], mesh.faces, getattr(mesh, 'dir_class', None))
         vertices_true, quads_true = tokenizer.detokenize(true_tokens)
         true_path = out_dir / f"true_mesh_{i}_faces{face_count}.png"
         plotting_tools.plt_mesh(vertices_true, quads_true, output_file=str(true_path))

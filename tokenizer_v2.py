@@ -8,16 +8,27 @@ from half_edge import order_quads_yx
 
 class Tokenizer2D:
     def __init__(self, quantization_levels, verbose=False, max_length_padding: Optional[int] = None,
-                 n_start_end_tokens_repeat: Optional[int] = 8, sorting_strategy: int = 1):
+                 n_start_end_tokens_repeat: Optional[int] = 8, sorting_strategy: int = 1,
+                 dim: int = 2):
         """
         Args:
             sorting_strategy: 0 = lexicographical (baseline), 1 = directed row traversal
                               (full 8 tokens/face), 2 = directed row traversal with
                               row-compressed emission (4 tokens/face mid-row + eor token),
                               3 = like 2 but rows enforced left-to-right (all CW).
+                              For dim=3, only strategy 0 (lexicographical) and 1 (row
+                              grouping via `dir_class`, uncompressed) are supported --
+                              strategies 2/3's row-compressed emission relies on a 2D
+                              CW/CCW winding convention that has no well-defined 3D
+                              analog; row-compression for 3D is a documented follow-up,
+                              not implemented here.
+            dim: 2 or 3. For dim=3, `tokenize()` needs a `dir_class` array (one entry
+                 per face) to group faces into rows -- see `_order_quads_by_dir_class`.
         """
+        assert dim in (2, 3), f"dim must be 2 or 3, got {dim}"
         self.verbose = verbose
-        self.tokens_per_face = 8
+        self.dim = dim
+        self.tokens_per_face = 4 * dim
         self.start_token = quantization_levels
         self.end_token = quantization_levels + 1
         self.eor_token = quantization_levels + 2
@@ -43,15 +54,26 @@ class Tokenizer2D:
         else:
             self.max_length_padding = None
 
-    def tokenize(self, vertices: torch.Tensor, quads: torch.Tensor):
+    def tokenize(self, vertices: torch.Tensor, quads: torch.Tensor,
+                 dir_class: Optional[torch.Tensor] = None):
+        """
+        Args:
+            dir_class: only used for dim=3 -- one direction-class label per face
+                       (`quads.size(1)` entries), from the dataset (e.g. tistos
+                       `sample.npz`'s `dir_class`). Used to group faces into rows
+                       instead of the 2D half-edge sweep (see `_order_quads`).
+        """
         if self.verbose:
             print('start tokenizing the mesh')
 
-        sorted_quads, rows = self._order_quads(vertices, quads)
+        sorted_quads, rows = self._order_quads(vertices, quads, dir_class)
+        self.last_rows = rows  # informational for dim=3 (row-aligned windowing, Part C)
 
         coord_sequence = self._quads_to_coords(vertices, sorted_quads)
         quantized_coords, self.bounds = self._quantize_coords(coord_sequence)
-        tokens = self._build_token_sequence(quantized_coords, rows)
+        # rows only triggers compressed emission for dim=2 strategies 2/3; dim=3's
+        # dir_class rows are informational only (no compression scheme defined yet).
+        tokens = self._build_token_sequence(quantized_coords, rows if self.dim == 2 else None)
 
         if self.max_length_token_sequence < len(tokens):
             self.max_length_token_sequence = len(tokens)
@@ -67,7 +89,24 @@ class Tokenizer2D:
 
         return tokens
 
-    def _order_quads(self, vertices: torch.Tensor, quads: torch.Tensor):
+    def _order_quads(self, vertices: torch.Tensor, quads: torch.Tensor,
+                      dir_class: Optional[torch.Tensor] = None):
+        if self.dim == 3:
+            if self.sorting_strategy == 0:
+                if self.verbose:
+                    print("Using lexicographical sorting (Strategy 0, dim=3)")
+                return self._order_quads_lexicographical(vertices, quads), None
+            elif self.sorting_strategy == 1:
+                if self.verbose:
+                    print("dir_class-based row grouping (Strategy 1, dim=3)")
+                assert dir_class is not None, \
+                    "dim=3 sorting_strategy=1 needs a dir_class array (one label per face)"
+                return self._order_quads_by_dir_class(vertices, quads, dir_class)
+            else:
+                raise ValueError(
+                    f"sorting_strategy={self.sorting_strategy} not supported for dim=3 "
+                    "(row-compressed emission has no 3D winding convention yet -- use 0 or 1)")
+
         if self.sorting_strategy == 0:
             if self.verbose:
                 print("Using lexicographical sorting (Strategy 0)")
@@ -88,6 +127,34 @@ class Tokenizer2D:
         else:
             raise ValueError(f"Unknown sorting_strategy={
                              self.sorting_strategy}. Must be 0, 1, 2, or 3.")
+
+    def _order_quads_by_dir_class(self, vertices: torch.Tensor, quads: torch.Tensor,
+                                  dir_class: torch.Tensor):
+        """dim=3 row grouping: group faces by their `dir_class` label (structured-grid
+        direction, already computed by the domain_partition_3D generator) instead of
+        reverse-engineering a 3D half-edge sweep. Faces keep their given vertex winding
+        (no CCW normalization -- there is no single well-defined "CCW" for a 3D quad
+        without a reference normal; the source data is assumed consistently wound).
+
+        Returns (reordered_quads [4,n], rows) -- rows marks contiguous dir_class runs,
+        same (start,end) face-index-slice contract as the 2D row functions, usable by
+        Part C for row-aligned context windowing later.
+        """
+        dc = dir_class.tolist() if torch.is_tensor(dir_class) else list(dir_class)
+        n = quads.shape[1]
+        assert len(dc) == n, f"dir_class has {len(dc)} entries, expected {n} (one per face)"
+
+        order = sorted(range(n), key=lambda i: dc[i])
+        reordered = quads[:, order]
+
+        rows = []
+        start = 0
+        for i in range(1, n):
+            if dc[order[i]] != dc[order[i - 1]]:
+                rows.append((start, i))
+                start = i
+        rows.append((start, n))
+        return reordered, rows
 
     def _order_quads_lexicographical(self, vertices: torch.Tensor, quads: torch.Tensor):
         """standard face sorting."""
@@ -344,9 +411,22 @@ class Tokenizer2D:
         return indices[ccw_order]
 
     def _quads_to_coords(self, vertices: torch.Tensor, ordered_quads: torch.Tensor):
-        return vertices[ordered_quads].reshape(-1, 2)
+        return vertices[ordered_quads].reshape(-1, self.dim)
 
     def _quantize_coords(self, coords: torch.Tensor):
+        if self.dim == 3:
+            # Generic per-column min/max, dim=3. Bounds stored as
+            # [c0_min, c1_min, c2_min, c0_max, c1_max, c2_max] for dequantization.
+            mins = torch.min(coords, dim=0).values
+            maxs = torch.max(coords, dim=0).values
+            ranges = torch.where(maxs != mins, maxs - mins, torch.ones_like(maxs))
+            normalized = (coords - mins) / ranges
+            quantized = torch.round(
+                normalized * (self.quantization_levels - 1)).long()
+            quantized = torch.clamp(quantized, 0, self.quantization_levels - 1)
+            bounds = torch.cat([mins, maxs])
+            return quantized, bounds
+
         x_min, y_min = torch.min(coords, dim=0).values
         x_max, y_max = torch.max(coords, dim=0).values
 
@@ -368,7 +448,10 @@ class Tokenizer2D:
                               rows: Optional[List[Tuple[int, int]]] = None) -> List[int]:
         tokens = [self.start_token] * self.n_start_end_tokens_repeat
 
-        if rows is None:
+        if self.dim == 3:
+            for coord_tuple in quantized_coords:
+                tokens.extend(int(c) for c in coord_tuple)
+        elif rows is None:
             for coord_pair in quantized_coords:
                 tokens.extend([int(coord_pair[1]), int(coord_pair[0])])
         else:
@@ -430,7 +513,43 @@ class Tokenizer2D:
                 expected = 4  # subsequent faces in row are compressed
         return coord_tokens
 
+    def _detokenize_3d(self, tokens: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """dim=3 counterpart of `detokenize`. No row-compression (unsupported for
+        dim=3, see `_order_quads`) and no CCW reorder (no single well-defined
+        winding in 3D without a reference normal -- the emitted order is preserved
+        as-is, matching the encode side's `_order_quads_by_dir_class`)."""
+        coord_tokens: List[int] = []
+        in_coords = False
+        for token in tokens:
+            if token == self.start_token:
+                in_coords = True
+                continue
+            elif token == self.end_token:
+                break
+            elif in_coords and token < self.quantization_levels:
+                coord_tokens.append(token)
+
+        tpf = self.tokens_per_face  # 4 * dim
+        num_full_quads = len(coord_tokens) // tpf
+        coord_tokens = coord_tokens[:num_full_quads * tpf]
+        if len(coord_tokens) == 0:
+            return torch.empty(0, self.dim), torch.empty(4, 0, dtype=torch.long)
+
+        coord_tuples = torch.tensor(coord_tokens).reshape(-1, self.dim)
+        mins, maxs = self.bounds[:self.dim], self.bounds[self.dim:]
+        normalized = coord_tuples.float() / (self.quantization_levels - 1)
+        all_vertices = normalized * (maxs - mins) + mins
+
+        num_quads = len(all_vertices) // 4
+        all_vertices_flat = all_vertices[:num_quads * 4]
+        vertices, vertex_mapping = self.unique_vertices_hash(all_vertices_flat)
+
+        final_quads = [vertex_mapping[qi * 4:qi * 4 + 4] for qi in range(num_quads)]
+        return vertices, torch.stack(final_quads).T if final_quads else torch.empty(4, 0, dtype=torch.long)
+
     def detokenize(self, tokens: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.dim == 3:
+            return self._detokenize_3d(tokens)
         if self.sorting_strategy == 2:
             coord_tokens = self._decode_compressed_coords(tokens)
         else:
@@ -489,7 +608,7 @@ class Tokenizer2D:
         vertex_dict = {}
         inverse_indices = []
         for i, vertex in enumerate(vertices_rounded):
-            key = (vertex[0], vertex[1])
+            key = tuple(vertex[:self.dim].tolist())
             if key not in vertex_dict:
                 vertex_dict[key] = len(vertex_dict)
             inverse_indices.append(vertex_dict[key])
@@ -536,17 +655,23 @@ class Tokenizer2D:
         quads = torch.stack([vertex_mapping[i * 4:(i + 1) * 4] for i in range(num_quads)])
         return vertices, quads.T
 
-    def testing(self, vertices: torch.Tensor, quads: torch.Tensor):
-        tokens = self.tokenize(vertices, quads)
+    def testing(self, vertices: torch.Tensor, quads: torch.Tensor, dir_class=None):
+        """Round-trip self-check: tokenize -> detokenize -> compare vertex sets.
+
+        Uses nearest-neighbour matching rather than sort-order alignment
+        (lexsort both sets, compare row-by-row). Sort-order alignment is
+        fragile whenever two vertices are close together in the primary sort
+        key: a tiny quantization nudge can flip their tie-break order, so the
+        row-wise comparison ends up comparing NON-corresponding vertices and
+        wrongly reports a large error even though the reconstructed set is
+        correct. Confirmed on real 3D data: lexsort-based comparison reported
+        MSE ~0.14 while nearest-neighbour distance was ~2/quantization_levels
+        (exactly the expected quantization step) for every vertex.
+        """
+        tokens = self.tokenize(vertices, quads, dir_class)
         recon_vertices, quads_recon = self.detokenize(tokens)
 
-        indices_init = lexsort((vertices[:, 1], vertices[:, 0]))
-        vertices_init_sorted = vertices[indices_init]
-        indices_recon = lexsort((recon_vertices[:, 1], recon_vertices[:, 0]))
-        recon_vertices_sorted = recon_vertices[indices_recon]
-
-        if vertices_init_sorted.size(0) == recon_vertices_sorted.size(0):
-            mse = torch.mean(
-                (vertices_init_sorted - recon_vertices_sorted) ** 2)
-            return mse.item() < 1e-5 and quads.size(1) == quads_recon.size(1)
-        return False
+        if vertices.size(0) != recon_vertices.size(0):
+            return False
+        nn_dist = torch.cdist(vertices, recon_vertices).min(dim=1).values
+        return bool((nn_dist.max() < 1e-2).item()) and quads.size(1) == quads_recon.size(1)

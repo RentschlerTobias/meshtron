@@ -9,7 +9,7 @@ class JSONLLogger:
 
     Layout:
         <log_dir>/<config_hash>/
-            config.json     # Snapshot der TrainingConfig
+            config.json     # Snapshot der PipelineConfig
             metrics.jsonl   # eine Zeile pro logged event
             result.json     # finales Ergebnis (best metrics + Konfig-Hash)
     """

@@ -4,7 +4,7 @@ Two-stage workflow:
     stage1  ->  optimise lr, warmup, dropout, weight_decay, n_latents
     stage2  ->  optimise architecture (d_model, depth, n_heads)
 
-Each trial builds a TrainingConfig (inheriting any fields not in the search
+Each trial builds a PipelineConfig (inheriting any fields not in the search
 space from --base-config or the dataclass defaults), runs the Trainer, and
 returns best_val_bpt. The objective is minimised.
 
@@ -23,7 +23,7 @@ import optuna
 from optuna.pruners import HyperbandPruner, MedianPruner, NopPruner
 from optuna.samplers import TPESampler
 
-from config import TrainingConfig
+from config import PipelineConfig
 from metrics import EpochMetrics
 from trainer import Trainer
 
@@ -40,7 +40,7 @@ def _make_on_epoch(trial: optuna.Trial) -> Callable:
     return on_epoch
 
 
-def _run_trial(trial: optuna.Trial, cfg: TrainingConfig) -> float:
+def _run_trial(trial: optuna.Trial, cfg: PipelineConfig) -> float:
     trainer = Trainer(cfg)
     trial.set_user_attr("config_hash", cfg.hash())
     trial.set_user_attr("run_dir", str(trainer.logger.run_dir))
@@ -50,7 +50,7 @@ def _run_trial(trial: optuna.Trial, cfg: TrainingConfig) -> float:
     return result.best_val_bpt
 
 
-def stage1_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
+def stage1_objective(trial: optuna.Trial, base: PipelineConfig) -> float:
     """Regularisation + optimisation search space."""
     overrides = dict(
         learning_rate=trial.suggest_float(
@@ -61,14 +61,14 @@ def stage1_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
         n_latents=trial.suggest_categorical(
             "n_latents", [8, 16, 32, 64]),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg)
 
 
 _LAYER_OPTIONS = [2, 4, 6]
 
 
-def stage2_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
+def stage2_objective(trial: optuna.Trial, base: PipelineConfig) -> float:
     """Architecture search. Number of stages and layers per stage are independent."""
     d_model = trial.suggest_categorical("d_model", [256, 384, 512, 768])
     n_heads = max(1, d_model // 64)
@@ -85,11 +85,11 @@ def stage2_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
         n_heads=int(n_heads),
         stage_layers=tuple(int(l) for l in layers),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg)
 
 
-def stage3_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
+def stage3_objective(trial: optuna.Trial, base: PipelineConfig) -> float:
     """Fine-tune: learning rate, warmup, batch size, regularization."""
     overrides = dict(
         learning_rate=trial.suggest_float(
@@ -102,20 +102,20 @@ def stage3_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
         accumulation_steps=trial.suggest_categorical(
             "accumulation_steps", [1, 2, 4]),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg)
 
 
-def sorting_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
+def sorting_objective(trial: optuna.Trial, base: PipelineConfig) -> float:
     """Compare full vs row-compressed encoding on otherwise identical configs."""
     overrides = dict(
         sorting_strategy=trial.suggest_categorical("sorting_strategy", [1, 2]),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg)
 
 
-def all_stages_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
+def all_stages_objective(trial: optuna.Trial, base: PipelineConfig) -> float:
     """Optimize all parameters from stage1, stage2 and sorting simultaneously."""
     d_model = trial.suggest_categorical("d_model", [256, 384, 512])
     n_heads = max(1, d_model // 64)
@@ -139,7 +139,7 @@ def all_stages_objective(trial: optuna.Trial, base: TrainingConfig) -> float:
             "n_latents", [8, 16, 32, 64]),
         sorting_strategy=trial.suggest_categorical("sorting_strategy", [1, 2]),
     )
-    cfg = TrainingConfig.from_dict({**base.to_dict(), **overrides})
+    cfg = PipelineConfig.from_dict({**base.to_dict(), **overrides})
     return _run_trial(trial, cfg)
 
 
@@ -153,7 +153,7 @@ OBJECTIVES = {"stage1": stage1_objective,
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Optuna sweep over TrainingConfig.")
+        description="Optuna sweep over PipelineConfig.")
     p.add_argument("--stage", choices=list(OBJECTIVES), default="stage1",
                    help="stage1: lr/warmup/dropout/weight_decay/n_latents, "
                         "stage2: d_model/n_heads/n_stages/stage_layers, "
@@ -170,7 +170,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--early-stopping-patience", type=int, default=5,
                    help="Per-trial early stopping patience.")
     p.add_argument("--base-config", type=Path, default=None,
-                   help="Optional JSON TrainingConfig used as the base; "
+                   help="Optional JSON PipelineConfig used as the base; "
                         "fields outside the search space are inherited.")
     p.add_argument("--log-dir", type=str, default="runs",
                    help="Parent dir for per-trial Trainer run directories.")
@@ -185,15 +185,15 @@ def main() -> None:
     args = parse_args()
 
     base = (
-        TrainingConfig.from_dict(json.loads(args.base_config.read_text()))
-        if args.base_config else TrainingConfig()
+        PipelineConfig.from_dict(json.loads(args.base_config.read_text()))
+        if args.base_config else PipelineConfig()
     )
 
     study_name = args.study_name or f"meshtron-{args.stage}"
     log_root = Path(args.log_dir) / study_name
 
     # Forced overrides shared by every trial
-    base = TrainingConfig.from_dict({
+    base = PipelineConfig.from_dict({
         **base.to_dict(),
         "num_epochs": args.trial_epochs,
         "early_stopping_patience": args.early_stopping_patience,

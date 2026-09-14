@@ -21,7 +21,7 @@ from pathlib import Path
 
 import torch
 
-from config import TrainingConfig
+from config import PipelineConfig
 from trainer import Trainer
 
 
@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def run_one(base: TrainingConfig, seed: int, strategy: int,
+def run_one(base: PipelineConfig, seed: int, strategy: int,
             log_dir: str, epochs: int, early_stopping: int,
             batch_size: int | None = None) -> dict:
     overrides: dict = {
@@ -64,7 +64,7 @@ def run_one(base: TrainingConfig, seed: int, strategy: int,
     }
     if batch_size is not None:
         overrides["batch_size"] = batch_size
-    cfg = TrainingConfig.from_dict(overrides)
+    cfg = PipelineConfig.from_dict(overrides)
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -194,7 +194,7 @@ def plot_comparison(agg: dict, output_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    base = TrainingConfig.from_dict(json.loads(args.base_config.read_text()))
+    base = PipelineConfig.from_dict(json.loads(args.base_config.read_text()))
 
     summary_path = args.summary_path or Path(args.log_dir) / "summary.jsonl"
     grid = [(s, k) for k in args.strategies for s in args.seeds]

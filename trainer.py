@@ -9,15 +9,27 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-from config import TrainingConfig
+from config import PipelineConfig
 from dataset import MeshData
 from logger import JSONLLogger
-from meshtron import Meshtron
+from quadtron import Quadtron
 from metrics import EpochMetrics, TokenLossAccumulator
-from objectives import TeacherForcingObjective
+from objectives import (
+    CriticAdvantage,
+    GroupRelativeAdvantage,
+    RLObjective,
+    TeacherForcingObjective,
+)
 from policy import Policy
 from reproducibility import dataloader_generator, set_seed, worker_init_fn
 from tokenizer_v2 import Tokenizer2D
+
+
+class TrainingCancelled(Exception):
+    """Raise from an `on_epoch` callback (Trainer.run) or a `stop_check`
+    (polytron_chain.run_polytron) to abort a run cooperatively, between
+    epochs/stages -- Trainer.run()'s `finally` block still writes the partial
+    result and closes the logger before this propagates to the caller."""
 
 
 @dataclass
@@ -41,7 +53,7 @@ _PRECISION_DTYPE = {
 
 
 class Trainer:
-    """Schlanker Trainer fuer Meshtron.
+    """Schlanker Trainer fuer Quadtron.
 
     - Token-gewichteter Loss (sum/n_tokens) -> vergleichbar ueber Batch-Size,
       Sequenzlaenge und Padding hinweg.
@@ -50,7 +62,7 @@ class Trainer:
     - JSONL-Logging pro Run, Checkpointing nur wenn ausdruecklich verlangt.
     """
 
-    def __init__(self, cfg: TrainingConfig):
+    def __init__(self, cfg: PipelineConfig):
         self.cfg = cfg
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -60,6 +72,7 @@ class Trainer:
             quantization_levels=cfg.quantization,
             verbose=False,
             sorting_strategy=cfg.sorting_strategy,
+            dim=cfg.dim,
         )
 
         (
@@ -70,23 +83,29 @@ class Trainer:
             self.min_face_count,
         ) = self._build_loaders()
 
-        self.model = Meshtron(
+        self.model = Quadtron(
             vocab_size=self.tokenizer.vocab_size,
             d_model=cfg.d_model,
             max_seq_length=self.max_length,
             n_latents=cfg.n_latents,
-            input_dim=2,
+            input_dim=cfg.dim,
             min_face_count=self.min_face_count,
             max_face_count=self.max_face_count,
             n_heads=cfg.n_heads,
             stage_layers=tuple(cfg.stage_layers),
             dropout=cfg.dropout,
             ffn_mult=cfg.ffn_mult,
+            use_flash_attention=cfg.use_flash_attention,
+            sliding_window_size=cfg.sliding_window_size,
             verbose=False,
         ).to(self.device)
-        self.policy = Policy(self.model)
 
-        self.objective = TeacherForcingObjective(pad_token=self.tokenizer.pad_token)
+        if cfg.init_checkpoint:
+            ckpt = torch.load(cfg.init_checkpoint, map_location=self.device, weights_only=False)
+            self.model.load_state_dict(ckpt["model_state_dict"])
+
+        self.policy = Policy(self.model)
+        self.objective = self._build_objective(cfg)
 
         self.optimizer = optim.AdamW(
             self.model.parameters(),
@@ -205,6 +224,38 @@ class Trainer:
 
     # ----------------------------------------------------------------- private
 
+    def _build_objective(self, cfg: PipelineConfig):
+        """TeacherForcingObjective (Teil A) unless cfg.rl_enabled, in which
+        case RLObjective (Teil B) with the configured AdvantageEstimator and
+        a Quadtron reward function for cfg.rl_curriculum_stage. Swapping GRPO
+        <-> critic-based advantage is a config change (cfg.advantage_estimator),
+        not a code change -- see objectives.py / the decision log."""
+        if not cfg.rl_enabled:
+            return TeacherForcingObjective(pad_token=self.tokenizer.pad_token)
+
+        from rewards import make_quadtron_reward
+
+        if cfg.advantage_estimator == "group_relative":
+            estimator = GroupRelativeAdvantage()
+        elif cfg.advantage_estimator == "critic":
+            estimator = CriticAdvantage(device=self.device)
+        else:
+            raise ValueError(
+                f"Unknown advantage_estimator={cfg.advantage_estimator!r} "
+                "(expected 'group_relative' or 'critic')")
+
+        reward_fn = make_quadtron_reward(self.tokenizer, cfg.rl_curriculum_stage,
+                                         cfg.reward_weights)
+        return RLObjective(
+            reward_fn=reward_fn,
+            advantage_estimator=estimator,
+            pad_token=self.tokenizer.pad_token,
+            eos_token=self.tokenizer.end_token,
+            rollouts_per_condition=cfg.rl_rollouts_per_condition,
+            temperature=cfg.rl_temperature,
+            max_length=cfg.rl_max_length or None,
+        )
+
     def _epoch(self, loader, train: bool, desc: str) -> EpochMetrics:
         self.model.train(mode=train)
         accumulator = TokenLossAccumulator()
@@ -283,12 +334,14 @@ class Trainer:
             self.tokenizer,
             n_sample_points=self.cfg.n_sample_points,
             verbose=False,
+            dim=self.cfg.dim,
         )
         val_dataset = MeshData(
             val_meshes,
             self.tokenizer,
             n_sample_points=self.cfg.n_sample_points,
             verbose=False,
+            dim=self.cfg.dim,
         )
 
         common = dict(

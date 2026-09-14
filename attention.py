@@ -8,7 +8,8 @@ from typing import Optional, Tuple, Dict
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model=512, n_heads=8, dropout=0.1, is_cross_attention: Optional[bool] = False, max_position: Optional[int] = 10000):
+    def __init__(self, d_model=512, n_heads=8, dropout=0.1, is_cross_attention: Optional[bool] = False,
+                 max_position: Optional[int] = 10000, use_flash_attention: bool = False):
         super().__init__()
 
         assert d_model % n_heads == 0, "d_model muss durch n_heads teilbar sein"
@@ -16,6 +17,8 @@ class MultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_k = d_model // n_heads  # Dimension pro Head
+        self.use_flash_attention = use_flash_attention
+        self.dropout_p = dropout
 
         # Linear layers für Q, K, V
         self.w_q = nn.Linear(d_model, d_model, bias=False)
@@ -100,11 +103,20 @@ class MultiHeadAttention(nn.Module):
         """
         Args:
             Q, K, V: [batch_size, n_heads, seq_len, d_k]
-            mask: Optional mask
+            mask: Optional additive mask (0 / -inf), same convention either backend
 
         Returns:
             output: [batch_size, n_heads, seq_len, d_k]
         """
+        if self.use_flash_attention:
+            # torch's native SDPA dispatches to Flash / memory-efficient / math
+            # kernels depending on hardware+dtype; accepts the same additive
+            # float mask convention `_causal_mask`/windowed mask already build,
+            # so no mask-format conversion is needed here.
+            return F.scaled_dot_product_attention(
+                Q, K, V, attn_mask=mask,
+                dropout_p=self.dropout_p if self.training else 0.0,
+            )
 
         d_k = Q.size(-1)
 

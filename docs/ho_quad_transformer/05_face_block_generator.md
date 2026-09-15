@@ -209,3 +209,6 @@ Reihenfolge bleibt: **Phase 0** (Baseline auf 10k neu trainieren = ehrliche Mess
 4. `policy.py`: Pointer-Maske (nur gültige Vertex-Indizes) für Constrained Decoding.
 5. Metriken: **Gen-Rekonstruktionsrate** (Ziel >90 %), Bündigkeit geteilter Kanten (Sagitta-Diff),
    HO-Kantenfehler.
+
+
+

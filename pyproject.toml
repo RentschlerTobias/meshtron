@@ -17,6 +17,7 @@ dependencies = [
     "optuna>=4.0",
     "gmsh>=4.15",
     "textual>=8.2.8",
+    "plotly>=7.1.0",
 ]
 
 # openmesh braucht Kompilierung (C++), nur von den half_edge-Modulen genutzt, NICHT

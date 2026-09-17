@@ -326,7 +326,8 @@ def run_polytron(cfg, ep1=None, ep2=None, ep3=None, eval_n=150, gallery=6,
         cand = [i for i in ev_ids if ex_v[i]['fc'] == f]
         gids += cand[:max(1, gallery // 4)]
     gids = gids[:gallery] or list(ev_ids[:gallery])
-    fig, axes = plt.subplots(2, len(gids), figsize=(3 * len(gids), 6))
+    fig, axes = plt.subplots(2, len(gids), figsize=(3 * len(gids), 6),
+                             squeeze=False)
     axes = np.atleast_2d(axes)
     for c, i in enumerate(gids):
         d = six[i]; nlvl = ex_v[i]['n']

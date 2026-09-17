@@ -1,4 +1,8 @@
-import openmesh as om
+try:
+    import openmesh as om
+except Exception:  # pragma: no cover - optional build dependency may be missing
+    om = None
+
 import numpy as np
 import torch
 
@@ -32,6 +36,11 @@ def order_quads_yx(vertices: torch.Tensor, quads: torch.Tensor) -> torch.Tensor:
     Row-end:   entrance edge first, other 2 lex-sorted last.
     Fallback:  CCW.
     """
+    if om is None:
+        raise RuntimeError(
+            "openmesh is not installed; order_quads_yx is only available when "
+            "openmesh is built. Install the 'mesh' extra or use a 3D data path."
+        )
     n = quads.shape[1]
     quads_np = quads.numpy()
 

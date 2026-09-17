@@ -29,6 +29,11 @@ import itertools
 import numpy as np
 import torch
 
+
+class DegenerateBlockError(ValueError):
+    """Block-Geometrie mit <4 eindeutigen Vert-Mengen auf einem Hexa-Face (weld-Fusion)."""
+    pass
+
 from polytron_tokenizer import PolytronTokenizer
 
 
@@ -101,6 +106,9 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
     edges = torch.zeros(2, 0, dtype=torch.long) if edges is None else edges
 
     fc = [_faces_of(b) for b in blks]
+    for bi, fb in enumerate(fc):
+        if any(len(f) < 4 for f in fb):
+            raise DegenerateBlockError(f"block {bi} hat Face mit <4 eindeutigen Verts (geweldete Zwillings-Verts)")
     shared = {}
     adj = [set() for _ in range(F)]
     for a, b in itertools.combinations(range(F), 2):

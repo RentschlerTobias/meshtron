@@ -527,6 +527,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--src', type=Path, required=True)
     ap.add_argument('--n', default='2,3')
+    ap.add_argument('--n3-maxblocks', type=int, default=0,
+                    help='n3 nur auf Original-Samples mit <= dieser Blockzahl (0: alle)')
+    ap.add_argument('--max-tri-points', type=int, default=768)
     ap.add_argument('--out-quadtron', type=Path, default=Path('data/quadtron_data_3d_aug.pt'))
     ap.add_argument('--out-polytron', type=Path, default=Path('data/polytron_data_3d_aug.pt'))
     args = ap.parse_args()
@@ -542,13 +545,18 @@ def main():
         p = Path(p)
         s = dict(np.load(p, allow_pickle=True))
         name = p.parent.name
-        quadtron.append(build_quadtron_sample(s))
-        polytron.append(build_polytron_sample(s, rng))
-        for n in [int(x) for x in args.n.split(',')]:
-            r = subdivide_core(s, n, f"{name}_n{n}")
-            print(name, "n=%d" % n, r['report'])
-            quadtron.append(build_quadtron_aug(r))
-            polytron.append(build_polytron_aug(r, rng))
+        try:
+            quadtron.append(build_quadtron_sample(s))
+            polytron.append(build_polytron_sample(s, rng))
+            for n in [int(x) for x in args.n.split(',')]:
+                if n == 3 and args.n3_maxblocks and int(s['blocks'].shape[0]) > args.n3_maxblocks:
+                    continue
+                r = subdivide_core(s, n, f"{name}_n{n}")
+                print(name, "n=%d" % n, r['report'])
+                quadtron.append(build_quadtron_aug(r))
+                polytron.append(build_polytron_aug(r, rng, max_tri_points=args.max_tri_points))
+        except Exception as e:
+            print(f"SKIP {name}: {type(e).__name__}: {e}")
     torch.save(quadtron, args.out_quadtron)
     torch.save(polytron, args.out_polytron)
     print("wrote", args.out_quadtron, args.out_polytron, len(quadtron), len(polytron))

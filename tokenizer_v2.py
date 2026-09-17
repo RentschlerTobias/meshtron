@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import openmesh as om
 from torch_geometric.utils import lexsort
 from typing import List, Tuple, Optional
 from half_edge import order_quads_yx
@@ -71,9 +70,9 @@ class Tokenizer2D:
 
         coord_sequence = self._quads_to_coords(vertices, sorted_quads)
         quantized_coords, self.bounds = self._quantize_coords(coord_sequence)
-        # rows only triggers compressed emission for dim=2 strategies 2/3; dim=3's
-        # dir_class rows are informational only (no compression scheme defined yet).
-        tokens = self._build_token_sequence(quantized_coords, rows if self.dim == 2 else None)
+        if self.dim == 3 and self.sorting_strategy not in (2, 3):
+            rows = None
+        tokens = self._build_token_sequence(quantized_coords, rows)
 
         if self.max_length_token_sequence < len(tokens):
             self.max_length_token_sequence = len(tokens)
@@ -102,6 +101,13 @@ class Tokenizer2D:
                 assert dir_class is not None, \
                     "dim=3 sorting_strategy=1 needs a dir_class array (one label per face)"
                 return self._order_quads_by_dir_class(vertices, quads, dir_class)
+            elif self.sorting_strategy in (2, 3):
+                if self.verbose:
+                    print(f"row-compressed emission via dir_class chains "
+                          f"(Strategy {self.sorting_strategy}, dim=3)")
+                assert dir_class is not None, \
+                    f"dim=3 sorting_strategy={self.sorting_strategy} needs a dir_class array"
+                return self._order_quads_compressed_3d(vertices, quads, dir_class)
             else:
                 raise ValueError(
                     f"sorting_strategy={self.sorting_strategy} not supported for dim=3 "
@@ -155,6 +161,49 @@ class Tokenizer2D:
                 start = i
         rows.append((start, n))
         return reordered, rows
+
+    def _order_quads_compressed_3d(self, vertices: torch.Tensor, quads: torch.Tensor,
+                                   dir_class: torch.Tensor):
+        """dim=3 row-compressed emission (strategy 2/3): chain faces greedily so that
+        each next face's first directed edge (v0->v1) equals the REVERSED last
+        directed edge (v2->v3) of its predecessor -- exactly the invariant the 2D
+        strategy-2 decoder reconstructs the missing first verts from
+        (adjacent, consistently-wound quads always satisfy this: their shared
+        edge is traversed in opposite directions). Rows are anchored by dir_class
+        labels (ordering groups, same source as strategy 1); each maximal chain
+        becomes one row. Faces keep their given winding.
+
+        Returns (reordered_quads [4,n], rows [(start,end)-slices])
+        """
+        dc = dir_class.tolist() if torch.is_tensor(dir_class) else list(dir_class)
+        n = quads.shape[1]
+        assert len(dc) == n, f"dir_class has {len(dc)} entries, expected {n}"
+        q = quads.T.tolist()  # q[i] = [v0,v1,v2,v3]
+
+        order: List[int] = []
+        rows: List[Tuple[int, int]] = []
+        for label in sorted(set(dc)):
+            group = [i for i in range(n) if dc[i] == label]
+            used = set()
+            for seed in group:
+                if seed in used:
+                    continue
+                chain = [seed]
+                used.add(seed)
+                row_start = len(order)
+                while True:
+                    last = q[chain[-1]]
+                    want = (int(last[3]), int(last[2]))  # next face starts (v3, v2)
+                    nxt = next((g for g in group
+                                if g not in used and
+                                (int(q[g][0]), int(q[g][1])) == want), None)
+                    if nxt is None:
+                        break
+                    chain.append(nxt)
+                    used.add(nxt)
+                order.extend(chain)
+                rows.append((row_start, len(order)))
+        return quads[:, order], rows
 
     def _order_quads_lexicographical(self, vertices: torch.Tensor, quads: torch.Tensor):
         """standard face sorting."""
@@ -449,8 +498,17 @@ class Tokenizer2D:
         tokens = [self.start_token] * self.n_start_end_tokens_repeat
 
         if self.dim == 3:
-            for coord_tuple in quantized_coords:
-                tokens.extend(int(c) for c in coord_tuple)
+            if rows is None:
+                for coord_tuple in quantized_coords:
+                    tokens.extend(int(c) for c in coord_tuple)
+            else:
+                for s, e in rows:
+                    for face_idx in range(s, e):
+                        base = face_idx * 4
+                        v_start = 0 if face_idx == s else 2
+                        for v in range(v_start, 4):
+                            tokens.extend(int(c) for c in quantized_coords[base + v])
+                    tokens.append(self.eor_token)
         elif rows is None:
             for coord_pair in quantized_coords:
                 tokens.extend([int(coord_pair[1]), int(coord_pair[0])])
@@ -513,21 +571,60 @@ class Tokenizer2D:
                 expected = 4  # subsequent faces in row are compressed
         return coord_tokens
 
-    def _detokenize_3d(self, tokens: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """dim=3 counterpart of `detokenize`. No row-compression (unsupported for
-        dim=3, see `_order_quads`) and no CCW reorder (no single well-defined
-        winding in 3D without a reference normal -- the emitted order is preserved
-        as-is, matching the encode side's `_order_quads_by_dir_class`)."""
+    def _decode_compressed_coords_3d(self, tokens: List[int]) -> List[int]:
+        """3D counterpart of _decode_compressed_coords: 12 coord tokens per face
+        (4 verts x 3 coords), mid-row faces emit only v2,v3 (6 tokens); the
+        missing first verts are the reversed last edge of the previous face
+        (prev v3, prev v2)."""
         coord_tokens: List[int] = []
+        pending: List[int] = []
+        prev_face: List[int] = []
+        expected = 12
         in_coords = False
+
         for token in tokens:
             if token == self.start_token:
                 in_coords = True
                 continue
-            elif token == self.end_token:
+            if not in_coords:
+                continue
+            if token == self.end_token:
                 break
-            elif in_coords and token < self.quantization_levels:
-                coord_tokens.append(token)
+            if token == self.eor_token:
+                pending = []
+                expected = 12
+                continue
+            if token >= self.quantization_levels:
+                continue
+            pending.append(int(token))
+            if len(pending) == expected:
+                face = pending if expected == 12 else \
+                    prev_face[9:12] + prev_face[6:9] + pending
+                coord_tokens.extend(face)
+                prev_face = face
+                pending = []
+                expected = 6
+        return coord_tokens
+
+    def _detokenize_3d(self, tokens: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """dim=3 counterpart of `detokenize`. Strategy 2/3 decode the compressed
+        emission (see _decode_compressed_coords_3d) before the flat-coord path.
+        No CCW reorder (no single well-defined winding in 3D without a reference
+        normal -- the emitted order is preserved as-is, matching the encode
+        side's dir_class-chain ordering)."""
+        if self.sorting_strategy in (2, 3):
+            coord_tokens = self._decode_compressed_coords_3d(tokens)
+        else:
+            coord_tokens = []
+            in_coords = False
+            for token in tokens:
+                if token == self.start_token:
+                    in_coords = True
+                    continue
+                elif token == self.end_token:
+                    break
+                elif in_coords and token < self.quantization_levels:
+                    coord_tokens.append(token)
 
         tpf = self.tokens_per_face  # 4 * dim
         num_full_quads = len(coord_tokens) // tpf

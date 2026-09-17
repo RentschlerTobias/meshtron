@@ -14,3 +14,6 @@ figures/
 quad_domain_data/
 .venv/
 .uv-cache/
+data/hex3d_algohex/
+embeds3d/
+scripts/__pycache__/

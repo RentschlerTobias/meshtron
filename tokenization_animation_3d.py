@@ -337,7 +337,7 @@ def render_html(fig, out_path: str, max_idx: int, frames_json):
 <html><head><meta charset="utf-8">
 <style>
   body { margin:0; background:#fbfaf8; font-family: ui-sans-serif, Helvetica, Arial, sans-serif; }
-  .wrap { max-width: 1280px; margin: 0 auto; padding: 8px 12px 18px; }
+  .wrap { max-width: 1840px; margin: 0 auto; padding: 8px 12px 18px; }
   #controls { display:flex; align-items:center; gap:14px; padding:10px 4px 6px; }
   button.step { width:56px; height:44px; font-size:26px; border:1px solid #d8d2cc;
     border-radius:10px; background:#fff; color:#201e1d; cursor:pointer; }
@@ -369,7 +369,7 @@ function render() {
   var f = TOKFRAMES[idx];
   var L = JSON.parse(JSON.stringify(gd.layout));
   L.annotations[f.annoIdx] = f.anno;
-  Plotly.react(gd, f.data, L, {displayModeBar: false, responsive: false});
+  Plotly.react(gd, f.data, L, {displayModeBar: false, responsive: false, scrollZoom: true});
   document.getElementById('progressMask').style.width = (100 - (idx / maxIdx) * 100) + '%';
   document.getElementById('prevBtn').disabled = (idx === 0);
   document.getElementById('nextBtn').disabled = (idx === maxIdx);
@@ -422,10 +422,19 @@ def main():
                     help="hexa-row mode: polytron .pt, blocks in row-order, EOR per row")
     ap.add_argument("--hexa-start", default="min_theta", choices=["min_theta", "max_theta"],
                     help="hexa-row start rule: max-r in quadrant [-90,0), tie-break angle")
+    ap.add_argument("--gran", default="row", choices=["row", "block", "face"],
+                    help="hexa-row granularity: row-block dedup, block = 1 step/block, "
+                         "face = 1 step/quad (Meshtron-style, no dedup)")
+    ap.add_argument("--eoe", action="store_true",
+                    help="emit EOE (sep2) element token after each block/quad")
+    ap.add_argument("--coords", default="polar", choices=["polar", "cart"],
+                    help="vertex coords: polar (4 tok/vert: r,sin,cos,z) | "
+                         "cart (3 tok/vert: x,y,z)")
     a = ap.parse_args()
     if a.hexa:
         from tokenization_animation_3d_hexa import generate_hexa
-        generate_hexa(a.out_dir, a.data, a.idx, start_rule=a.hexa_start)
+        generate_hexa(a.out_dir, a.data, a.idx, start_rule=a.hexa_start,
+                      granularity=a.gran, eoe=a.eoe, coords=a.coords)
         return
     generate(a.out_dir, a.data, a.idx, a.max_faces,
              [int(s) for s in a.strategies.split(",")])

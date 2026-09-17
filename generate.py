@@ -144,19 +144,28 @@ _BLOCK_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
                 (0, 4), (1, 5), (2, 6), (3, 7))
 
 
-def write_vtk(path: str, vpt_cart: np.ndarray, blk) -> None:
-    """Legacy-ASCII-VTK UNSTRUCTURED_GRID, Hexa-Zellen (Typ 12)."""
+def write_vtk(path, vpt_cart, blk, pc_cart=None):
+    """Legacy-ASCII-VTK UNSTRUCTURED_GRID, Hexa-Zellen (Typ 12); optionale
+    Conditioning-Punktwolke als 1-Punkt-Zellen (Typ 1)."""
     m, f = vpt_cart.shape[0], len(blk)
+    np_pts = m + (len(pc_cart) if pc_cart is not None else 0)
     with open(path, "w") as fh:
         fh.write("# vtk DataFile Version 2.0\nmeshtron generate\nASCII\n")
         fh.write("DATASET UNSTRUCTURED_GRID\n")
-        fh.write(f"POINTS {m} double\n")
+        fh.write(f"POINTS {m + (len(pc_cart) if pc_cart is not None else 0)} double\n")
         for p in vpt_cart:
             fh.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
-        fh.write(f"CELLS {f} {9 * f}\n")
-        for b in blk:
-            fh.write("8 " + " ".join(str(int(i)) for i in b) + "\n")
-        fh.write(f"CELL_TYPES {f}\n" + "12\n" * f)
+        if pc_cart is not None:
+            for p in pc_cart:
+                fh.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
+        cells = [f"8 {' '.join(str(int(i)) for i in b)}" for b in blk]
+        types = ["12"] * f
+        if pc_cart is not None:
+            cells += [f"1 {m + k}" for k in range(len(pc_cart))]
+            types += ["1"] * len(pc_cart)
+        fh.write(f"CELLS {len(cells)} {sum(9 if t == '12' else 2 for t in types)}\n")
+        fh.write("\n".join(cells) + "\n")
+        fh.write(f"CELL_TYPES {len(types)}\n" + "\n".join(types) + "\n")
 
 
 def draw_mesh(ax, vpt_cart, blk, color, alpha):
@@ -167,7 +176,7 @@ def draw_mesh(ax, vpt_cart, blk, color, alpha):
             ax.plot(*V[[ids[a], ids[z]]].T, color=color, lw=0.4, alpha=alpha)
 
 
-def plot_result(path, vpt_cart, blk, gt, title):
+def plot_result(path, vpt_cart, blk, gt, title, pc_cart=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -175,6 +184,9 @@ def plot_result(path, vpt_cart, blk, gt, title):
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
     draw_mesh(ax, vpt_cart, blk, "tab:blue", 0.9)
+    if pc_cart is not None:
+        ax.scatter(pc_cart[:, 0], pc_cart[:, 1], pc_cart[:, 2],
+                   s=2, color="tab:green", alpha=0.5)
     if gt is not None:
         draw_mesh(ax, gt[0], gt[1], "tab:red", 0.35)
     ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
@@ -274,11 +286,18 @@ def main():
     vcart = np.stack([v_np[:, 0] * np.cos(v_np[:, 1]),
                       v_np[:, 0] * np.sin(v_np[:, 1]),
                       v_np[:, 2]], axis=-1)
-    write_vtk(args.out, vcart, blk.tolist())
+    pc_cart = None
+    if xyz is not None:
+        r01, s01, c01, z01 = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3]
+        pc_th = np.arctan2(s01, c01)
+        pc_cart = np.stack([rb[0] + r01 * (rb[1] - rb[0]) * np.cos(pc_th),
+                            rb[0] + r01 * (rb[1] - rb[0]) * np.sin(pc_th),
+                            zb[0] + z01 * (zb[1] - zb[0])], axis=-1)
+    write_vtk(args.out, vcart, blk.tolist(), pc_cart)
     print(f"saved {args.out}")
     if args.plot:
-        title = "generated (blau)" + (" vs source (rot)" if gt else "")
-        plot_result(args.plot, vcart, blk.tolist(), gt, title)
+        title = "generated (blau) vs source (rot) vs punktwolke (grün)" if gt else "generated (blau)"
+        plot_result(args.plot, vcart, blk.tolist(), gt, title, pc_cart)
         print(f"saved {args.plot}")
 
 

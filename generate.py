@@ -97,6 +97,14 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
                              dim=-1).values.min(dim=-1, keepdim=True).values
             nxt_l = nxt_l.masked_fill(nxt_l < kth, float("-inf"))
         nxt = int(torch.multinomial(F.softmax(nxt_l, dim=-1), 1).item())
+        if not (0 <= nxt < model.tok.weight.shape[0]):
+            raise RuntimeError(f"Sampled token id {nxt} out of vocab "
+                               f"{model.tok.weight.shape[0]} (logits finite: "
+                               f"{bool(torch.isfinite(nxt_l).all())})")
+        pos_rows = model.pos.weight.shape[0]
+        if pos0 >= pos_rows:
+            print(f"warn: positional limit {pos_rows} ohne stop erreicht")
+            break
         seq.append(nxt)
         if nxt == stop_id:
             break
@@ -224,6 +232,10 @@ def main():
     rb = tuple(float(v) for v in ck["r_bounds"])
     zb = tuple(float(v) for v in ck["z_bounds"])
     max_len = int(ck["model"]["pos.weight"].shape[0])
+    if args.max_tokens > max_len - 2:
+        print(f"note: --max-tokens {args.max_tokens} > pos-Matrix ({max_len}) "
+              f"-> gekappt auf {max_len - 2} (sonst pos-Embedding-Overlauf)")
+        args.max_tokens = max_len - 2
     print(f"ckpt d={cfg['d']} L={cfg['layers']} H={cfg['heads']} | bounds r={rb} z={zb}")
 
     model = GPTCond(ck["vocab"], cfg["d"], cfg["layers"], cfg["heads"], max_len,

@@ -86,6 +86,8 @@ class GPTCond(nn.Module):
         self.pad_id = pad_id
         self.tok = nn.Embedding(vocab, d, padding_idx=pad_id)
         self.pos = nn.Embedding(max_len, d)
+        # PolyGen-Style coordinate-type embedding: Slot im Vertex (0=r,1=sin,2=cos,3=z)
+        self.slot = nn.Embedding(4, d)
         self.drop = nn.Dropout(dropout)
         self.penc = PointEncoder(d, n_latent, dim=4)
         self.fc_emb = nn.Sequential(nn.Linear(1, d),
@@ -100,10 +102,12 @@ class GPTCond(nn.Module):
         hv = self.penc(pc) + self.fc_emb(fc[:, None])
         return hv
 
-    def forward(self, x, pc, fc):
+    def forward(self, x, pc, fc, slot=None):
         B, L = x.shape
         pos = torch.arange(L, device=x.device)
         h = self.tok(x) + self.pos(pos)[None]
+        if slot is not None:
+            h = h + self.slot(slot)
         c = self.condition(pc, fc)
         h = self.drop(h) * (1 + torch.tanh(c)[:, None]) + c[:, None]
         for blk in self.blocks:
@@ -111,15 +115,91 @@ class GPTCond(nn.Module):
         return self.head(self.ln(h))
 
 
-def batchify(items, pad_id, device):
-    """items: list of {tokens, points, blocks} -> tensors x, pc, fc."""
+def _unit_weights(tokens, specials, w_unit_end):
+    """Pro Token: 1.0 oder w_unit_end am letzten Token eines 4er-Vertex-Quants.
+    zwischen start/sep/stop kommen ausschliesslich Quants in 4er-Gruppen
+    (Emissions-Grammatik), specials tragen Gewicht 1.0."""
+    w = []
+    cnt = 0
+    for t in tokens:
+        if t in specials:
+            w.append(1.0)
+            cnt = 0
+        else:
+            w.append(w_unit_end if cnt % 4 == 3 else 1.0)
+            cnt += 1
+    return w
+
+
+def _slot_ids(tokens, specials):
+    """PolyGen coordinate-type: Slot im Vertex-Quant (0..3); specials -> 0."""
+    s = []
+    cnt = 0
+    for t in tokens:
+        if t in specials:
+            s.append(0)
+            cnt = 0
+        else:
+            s.append(cnt % 4)
+            cnt += 1
+    return s
+
+
+def batchify(items, pad_id, device, specials=(), w_unit_end=1.0):
+    """items: list of {tokens, points, blocks} -> tensors x, slot, w, pc, fc.
+    slot/w belang zur Zielsequenz x[:,1:] (shifted um 1)."""
     L = max(len(it["tokens"]) for it in items)
     x = torch.full((len(items), L), pad_id, dtype=torch.long)
+    slot = torch.zeros((len(items), L), dtype=torch.long)
+    w = torch.ones((len(items), L), dtype=torch.float32)
     for i, it in enumerate(items):
-        x[i, : len(it["tokens"])] = torch.as_tensor(it["tokens"], dtype=torch.long)
+        tk = it["tokens"]
+        x[i, : len(tk)] = torch.as_tensor(tk, dtype=torch.long)
+        if len(tk) > 1:
+            slot[i, 1 : len(tk)] = torch.as_tensor(_slot_ids(tk[:-1], specials),
+                                                   dtype=torch.long)
+            w[i, 1 : len(tk)] = torch.as_tensor(
+                _unit_weights(tk[:-1], specials, w_unit_end),
+                dtype=torch.float32)
     pc = torch.as_tensor(np.stack([it["points"] for it in items]), dtype=torch.float32)
     fc = torch.as_tensor([it["blocks"] for it in items], dtype=torch.float32)
-    return x.to(device), pc.to(device), fc.to(device)
+    return x.to(device), slot.to(device), w.to(device), pc.to(device), fc.to(device)
+
+
+def _cut_positions(tokens, specials):
+    """Indizes, an denen ein Fenster enden darf: vor jedem Token mit cnt==0
+    (Start eines Vertex-Quants oder Specials) - schneidet nie mitten im Quant."""
+    cuts, cnt = [], 0
+    for i, t in enumerate(tokens):
+        if cnt == 0 and i > 0:
+            cuts.append(i)
+        if t in specials:
+            cnt = 0
+        else:
+            cnt += 1
+    return cuts
+
+
+def sliding_windows(tokens, window, stride, specials):
+    """Fenster ueber den Tokenstream (stride <= window erlaubt Ueberlappung),
+    Grenzen nur an Quant-Grenzen."""
+    cuts = _cut_positions(tokens, specials)
+    out, start = [], 0
+    n = len(tokens)
+    while start < n:
+        lim = min(start + window, n)
+        cand = [p for p in cuts if start < p <= lim]
+        end = cand[-1] if cand else lim
+        if end <= start:
+            end = lim
+        out.append(tokens[start:end])
+        if end >= n:
+            break
+        nxt = [p for p in cuts if start < p <= start + stride]
+        start = nxt[-1] if nxt else start + stride
+        if start >= end:
+            start = end
+    return out
 
 
 def make_batches(items, budget=16384, cap=32):
@@ -143,24 +223,35 @@ def make_batches(items, budget=16384, cap=32):
 
 
 @torch.no_grad()
-def evaluate(model, batches, items, pad_id, vocab, dev, lossf, dtype):
+def evaluate(model, batches, items, pad_id, vocab, dev, lossf, dtype,
+             w_unit_end=1.0, specials=()):
     model.eval()
     vl, va, wn = [], [], []
     for idxs in batches:
         its = [items[i] for i in idxs]
-        x, pc, fc = batchify(its, pad_id, dev)
+        x, slot, w, pc, fc = batchify(its, pad_id, dev, specials, w_unit_end)
         with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
-            logits = model(x[:, :-1], pc, fc)
-        vl.append(lossf(logits.float().reshape(-1, vocab),
-                        x[:, 1:].reshape(-1)).item())
+            logits = model(x[:, :-1], pc, fc, slot=slot[:, :-1])
+        ce = F.cross_entropy(logits.float().reshape(-1, vocab),
+                             x[:, 1:].reshape(-1), reduction="none").reshape_as(x[:, 1:])
+        m = x[:, 1:] != pad_id
+        wv = w[:, 1:] * m
+        vl.append((ce * wv).sum().item() / wv.sum().item())
         pred = logits.argmax(-1)
         tgt = x[:, 1:]
-        m = tgt != pad_id
-        va.append(((pred[m] == tgt[m]).float().sum().item(), m.sum().item()))
+        va.append((((pred[m] == tgt[m]).float().sum().item(), m.sum().item())))
     model.train()
     ntok = sum(n for _, n in va)
     return (float(np.average([l for l in vl], weights=[len(idxs) for idxs in batches])),
             float(sum(c for c, _ in va) / max(1, ntok)))
+
+
+def weighted_loss(logits, tgt, w, pad_id, vocab, lossf):
+    ce = F.cross_entropy(logits.float().reshape(-1, vocab),
+                         tgt.reshape(-1), reduction="none").reshape_as(tgt)
+    m = tgt != pad_id
+    wv = w * m
+    return (ce * wv).sum() / wv.sum()
 
 
 def main():
@@ -187,16 +278,29 @@ def main():
                     help="per-Epoch-Checkpoint (model+opt) fuer Resume")
     ap.add_argument("--resume", default="", help="Checkpoint-File zum Weiterlaufen")
     ap.add_argument("--tag", default="full")
+    ap.add_argument("--window", type=int, default=0,
+                    help=">0: Sliding-Window-Laenge ueber den Tokenstream "
+                         "(Grenzen nur an Vertex-Quant-Grenzen)")
+    ap.add_argument("--stride", type=int, default=-1,
+                    help="Fenster-Vorschub (default window//2, Ueberlappung)")
+    ap.add_argument("--w-unit-end", type=float, default=1.0,
+                    help="OFFEN 1: a) 1.0 = ungewichtet; <1 gewichtet letztes "
+                         "Token je Vertex-Quant herab (unit-weighted CE)")
     args = ap.parse_args()
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if dev == "cuda" else torch.float32
     probe = HexaRowTokenizer()
     vocab, pad_id = probe.core.vocab_size, probe.core.pad_token
+    SPECIALS = {probe.core.start_token, probe.core.end_token,
+                probe.core.sep_token, probe.core.sep2_token,
+                probe.core.stop_token, probe.core.pad_token}
     print(f"vocab={vocab} pad={pad_id} dev={dev} dtype={dtype}")
 
     ds = torch.load(args.tokens, weights_only=False)
     src = torch.load(args.src, weights_only=False)
+    if isinstance(src, dict):
+        src = src["samples"]
     name2sample = {}
     for i, s in enumerate(src):
         name2sample[s.get("name", f"sample{i}")] = s
@@ -215,10 +319,19 @@ def main():
             raw = name2sample.get(s["name"])
             if raw is None:
                 continue
-            pts = sample_points(np.array(raw["vertices_polar"], dtype=np.float64),
+            pts = sample_points(raw["vertices_polar"].detach().cpu().numpy().astype(np.float64),
                                 args.n_points, rb, zb, rng)
-            items.append({"tokens": s["tokens"].tolist(), "points": pts,
-                          "blocks": s["blocks"], "name": s["name"]})
+            base = {"points": pts, "blocks": s["blocks"], "name": s["name"]}
+            toks = s["tokens"].tolist()
+            if args.window > 0 and len(toks) > args.window:
+                stride = args.stride if args.stride > 0 else args.window // 2
+                wins = sliding_windows(toks, args.window, stride, SPECIALS)
+                for k, wk in enumerate(wins):
+                    items.append({"tokens": wk, **base,
+                                  "name": f"{s['name']}#w{k}"})
+            else:
+                items.append({"tokens": toks, **base})
+        items = [it for it in items if len(it["tokens"]) >= 2]
         return items
 
     train_items, val_items = prep(ds["train"]), prep(ds["val"])
@@ -266,11 +379,12 @@ def main():
                     dynamic_ncols=True, leave=False)
         for bi in pbar:
             items = [train_items[j] for j in train_batches[bi]]
-            x, pc, fc = batchify(items, pad_id, dev)
+            x, slot, w, pc, fc = batchify(items, pad_id, dev, SPECIALS,
+                                          args.w_unit_end)
             with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
-                logits = model(x[:, :-1], pc, fc)
-                loss = lossf(logits.float().reshape(-1, vocab),
-                             x[:, 1:].reshape(-1))
+                logits = model(x[:, :-1], pc, fc, slot=slot[:, :-1])
+                loss = weighted_loss(logits, x[:, 1:], w[:, 1:], pad_id,
+                                     vocab, lossf)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -297,7 +411,7 @@ def main():
                f"tok-acc {ep_corr / max(1, ep_tok):.3f}  peakVRAM {vram:.2f} GB")
         if (ep + 1) % args.val_every == 0 or ep == args.epochs - 1:
             vl, va = evaluate(model, val_batches, val_items, pad_id, vocab,
-                              dev, lossf, dtype)
+                              dev, lossf, dtype, args.w_unit_end, SPECIALS)
             msg += f"  VAL loss {vl:.3f} tok-acc {va:.3f}"
         print(msg + f"  ({time.time() - t0:.0f}s)")
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(),

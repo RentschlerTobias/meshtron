@@ -521,8 +521,41 @@ def build_quadtron_aug(r):
                 dir_class=torch.tensor(np.asarray(r['dir_class'], np.int64)))
 
 
+def _proc_one(p_str, n_vals, n3_maxblocks, max_tri_points):
+    """Pro-Sample-Worker: load npz, Base+Subdivision-Builds. Returns
+    (name, [(kind, obj)...], msgs) kind in 'q'/'p'.
+    Deterministischer rng-Seed pro Sample (Subsampling)."""
+    import numpy as _np
+    from pathlib import Path
+    from domain_extractor_3d import build_quadtron_sample, build_polytron_sample
+    p = Path(p_str)
+    s = dict(_np.load(p, allow_pickle=True))
+    name = p.parent.name
+    import hashlib as _h
+    rng = _np.random.default_rng(int(_h.md5(name.encode()).hexdigest()[:8], 16))
+    hits = []
+    try:
+        hits.append(('q', build_quadtron_sample(s)))
+        base = build_polytron_sample(s, rng)
+        base['name'], base['subdiv_n'] = name, None
+        hits.append(('p', base))
+        for n in n_vals:
+            if n == 3 and n3_maxblocks and int(s['blocks'].shape[0]) > n3_maxblocks:
+                continue
+            r = subdivide_core(s, n, f"{name}_n{n}")
+            print(name, "n=%d" % n, r['report'], flush=True)
+            hits.append(('q', build_quadtron_aug(r)))
+            pa = build_polytron_aug(r, rng, max_tri_points=max_tri_points)
+            pa['name'] = f"{name}_n{n}"
+            hits.append(('p', pa))
+    except Exception as e:
+        print(f"SKIP {name}: {type(e).__name__}: {e}", flush=True)
+        return name, hits, f"SKIP {name}: {type(e).__name__}: {e}"
+    return name, hits, ""
+
+
 def main():
-    import argparse, glob as _g
+    import argparse, glob as _g, multiprocessing as mp
     from pathlib import Path
     ap = argparse.ArgumentParser()
     ap.add_argument('--src', type=Path, required=True)
@@ -530,33 +563,30 @@ def main():
     ap.add_argument('--n3-maxblocks', type=int, default=0,
                     help='n3 nur auf Original-Samples mit <= dieser Blockzahl (0: alle)')
     ap.add_argument('--max-tri-points', type=int, default=768)
+    ap.add_argument('--jobs', type=int, default=min(24, mp.cpu_count()))
     ap.add_argument('--out-quadtron', type=Path, default=Path('data/quadtron_data_3d_aug.pt'))
     ap.add_argument('--out-polytron', type=Path, default=Path('data/polytron_data_3d_aug.pt'))
     args = ap.parse_args()
 
     import torch
-    from torch_geometric.data import Data
-    from domain_extractor_3d import build_quadtron_sample, build_polytron_sample
-    rng = np.random.default_rng(0)
     srcs = sorted(_g.glob(str(args.src / '*/sample.npz')))
-    print(f"{len(srcs)} samples")
+    n_vals = [int(x) for x in args.n.split(',')]
+    print(f"{len(srcs)} samples", flush=True)
     quadtron, polytron = [], []
-    for p in srcs:
-        p = Path(p)
-        s = dict(np.load(p, allow_pickle=True))
-        name = p.parent.name
-        try:
-            quadtron.append(build_quadtron_sample(s))
-            polytron.append(build_polytron_sample(s, rng))
-            for n in [int(x) for x in args.n.split(',')]:
-                if n == 3 and args.n3_maxblocks and int(s['blocks'].shape[0]) > args.n3_maxblocks:
-                    continue
-                r = subdivide_core(s, n, f"{name}_n{n}")
-                print(name, "n=%d" % n, r['report'])
-                quadtron.append(build_quadtron_aug(r))
-                polytron.append(build_polytron_aug(r, rng, max_tri_points=args.max_tri_points))
-        except Exception as e:
-            print(f"SKIP {name}: {type(e).__name__}: {e}")
+    nsusp = 0
+    with mp.get_context('fork').Pool(args.jobs) as pool:
+        asyncs = [pool.apply_async(_proc_one, (p, n_vals, args.n3_maxblocks,
+                                               args.max_tri_points))
+                  for p in srcs]
+        for a in asyncs:
+            _name, hits, msg = a.get()
+            if msg:
+                print(msg, flush=True)
+            for kind, obj in hits:
+                (quadtron if kind == 'q' else polytron).append(obj)
+            nsusp += 1
+            if nsusp % 50 == 0:
+                print(f"... {nsusp} samples", flush=True)
     torch.save(quadtron, args.out_quadtron)
     torch.save(polytron, args.out_polytron)
     print("wrote", args.out_quadtron, args.out_polytron, len(quadtron), len(polytron))

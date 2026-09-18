@@ -112,10 +112,10 @@ def main():
                       flush=True)
 
     streams = [r for r in results if isinstance(r, dict)]
-    n_val = max(1, int(len(streams) * args.val_frac))
-    val_idx = set(range(len(streams) - n_val, len(streams)))
-    train = [s for j, s in enumerate(streams) if j not in val_idx]
-    val = [s for j, s in enumerate(streams) if j in val_idx]
+    machines = sorted({s["name"].rsplit("_n", 1)[0] for s in streams})
+    val_machines = set(machines[-max(1, int(len(machines) * args.val_frac)):])
+    train = [s for s in streams if s["name"].rsplit("_n", 1)[0] not in val_machines]
+    val = [s for s in streams if s["name"].rsplit("_n", 1)[0] in val_machines]
     torch.save({"train": train, "val": val, "vocab": vocab,
                 "r_bounds": rb, "z_bounds": zb}, args.out)
     print(f"wrote {args.out}: {len(train)} train / {len(val)} val ({nskip} skips)")

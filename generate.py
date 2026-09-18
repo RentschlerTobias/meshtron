@@ -242,12 +242,16 @@ def main():
     gt, xyz = None, None
     if args.mesh:
         obj = torch.load(args.mesh, weights_only=False)
+        if isinstance(obj, dict) and 'samples' in obj:
+            obj = obj['samples']
         xyz, blocks, name, faces_t = load_sample(obj, max(0, args.idx))
         if faces_t is not None:
             gt_faces_t = faces_t
             gt = (xyz, faces_t.tolist())
     elif args.idx >= 0:
         src = torch.load(args.src, weights_only=False)
+        if isinstance(src, dict) and 'samples' in src:
+            src = src['samples']
         xyz, blocks, name, faces_t = load_sample(src, args.idx)
         if faces_t is not None:
             gt = (xyz, faces_t.tolist())

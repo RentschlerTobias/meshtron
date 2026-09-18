@@ -12,10 +12,10 @@ Design (mit User festgelegt):
     kanonischer Ring) + Exit-Ring (4 Verts, axial zum Entry-Ring gepaart),
     jedes Folgende nur seine Exit-Ring-Tokens (Entry ist exakt die Exit-Face
     des Vorgaengers). EOR (sep_token) nach jeder Row, stop_token am Ende.
-  - Winding/Pairing: Entry-Ring startet am lex-min-Vertex (x,z), Ringrichtung
-    so, dass die Newell-Normale in den Block zeigt (Richtung Exit). Exit-Ring
-    startet am axialen Pair des Entry-Ring-Starts, Richtung +1 im
-    Min-Umfang-Ring (Ring zyklisch, Konvention fixiert das Training).
+  - Winding/Pairing: Entry- und Exit-Ring starten am je lex-min-Vertex
+    (x,z) mit derselben Ringrichtung: Newell-Normale entlang der Row-
+    Richtung (Entry->Exit). Exit-Ring startet zusaetzlich am axialen
+    Pair des Entry-Ring-Starts (Rotation ohne Richtungswechsel).
 
 Token-Stream: [start] block1(8V=32tok) [block2(4V=16tok)]... [sep(EOR)]
                [block...] [sep] ... [stop]
@@ -171,11 +171,14 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
     if z_split is None:
         z_split = 0.4 * float(np.median(blk_zspan)) if blk_zspan else 0.3
 
+    # Lex-Keys einmal pro Block/Vertex vorberechnen (sonst ~O(N^2) Tensor.item())
+    vkey = [(round(float(V[i, 1]), 6), round(float(V[i, 2]), 6), round(float(V[i, 0]), 6))
+            for i in range(V.shape[0])]
+    lex_keys = {b: min(vkey[int(v)] for v in blks[b]) for b in range(len(blks))}
+
     def _lex_key(b):
         """Block-Key = Meshpunkte des Blocks nach yzx sortiert, kleinster Punkt (y prioritaet)."""
-        pts = [(round(V[int(v), 1].item(), 6), round(V[int(v), 2].item(), 6),
-                round(V[int(v), 0].item(), 6)) for v in blks[b]]
-        return min(pts)
+        return lex_keys[b]
 
     def _choose_start(todo):
         return min(todo, key=_lex_key)
@@ -244,13 +247,14 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
             rot_e = _rotate_orient_ring(perm_e, e_pts, x_pts.mean(0) - e_pts.mean(0))
             entry_seq = [entry_ids[p] for p in rot_e]
 
-            # Exit-Ring: min-Umfang; Anchor = axiales Pair des Entry-Starts
+            # Exit-Ring: gleiche Newell-Richtung wie Entry, Start am axialen Partner
             exit_seq = None
             if edges.numel() > 0:
                 pairs = _axial_pairing(entry_seq, exit_ids_list, edges)
                 if len(pairs) == 4 and pairs[int(entry_seq[0])] in exit_ids_list:
                     anchor = pairs[int(entry_seq[0])]
-                    perm_x = _ring_min_perimeter(x_pts)
+                    perm_x = _rotate_orient_ring(_ring_min_perimeter(x_pts),
+                                                 x_pts, x_pts.mean(0) - e_pts.mean(0))
                     k = perm_x.index(exit_ids_list.index(anchor))
                     exit_seq = [exit_ids_list[perm_x[(k + s) % 4]] for s in range(4)]
             if exit_seq is None:  # Fallback: lex (x,z) Reihenfolge der Exit-Verts

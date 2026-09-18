@@ -34,7 +34,7 @@ one() {
   fi
 }
 export -f one
-export TET_HOME LOGDIR
+export TET_HOME OUTDIR LOGDIR
 
 for SRC in "$MESH_BASE/batch" "$MESH_BASE/batch_t19_sweep"; do
   ls "$SRC"/*/blocks.vtk 2>/dev/null

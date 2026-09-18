@@ -50,9 +50,13 @@ def _faces_of(b):
 
 def _ring_min_perimeter(pts):
     """Positionen (Index in pts) eines 4-Punkt-Rings mit minimalem Umfang."""
+    # 6 Paar-Distanzen je einmal (np.linalg.norm bei 24 Perms x 4 Kanten = 173k Calls)
+    d = {(a, b): np.linalg.norm(pts[b] - pts[a])
+         for i, a in enumerate(range(4)) for b in range(i + 1, 4)}
+    dist = lambda a, b: d[(a, b) if a < b else (b, a)]
     best, best_order = None, None
     for perm in itertools.permutations(range(4)):
-        s = sum(np.linalg.norm(pts[perm[(i + 1) % 4]] - pts[perm[i]]) for i in range(4))
+        s = sum(dist(perm[i], perm[(i + 1) % 4]) for i in range(4))
         if best is None or s < best - 1e-12:
             best, best_order = s, list(perm)
     return best_order
@@ -110,13 +114,24 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
     for bi, fb in enumerate(fc):
         if any(len(f) < 4 for f in fb):
             raise DegenerateBlockError(f"block {bi} hat Face mit <4 eindeutigen Verts (geweldete Zwillings-Verts)")
-    shared = {}
+    shared_acc = {}
     adj = [set() for _ in range(F)]
-    for a, b in itertools.combinations(range(F), 2):
-        c = set(fc[a]) & set(fc[b])
-        if c:
-            shared[(a, b)] = frozenset(c)  # saemtliche geteilten Faces
-            adj[a].add(b); adj[b].add(a)
+    by_face = {}
+    for b in range(F):
+        for f in fc[b]:
+            by_face.setdefault(f, []).append(b)
+    for f, owners in by_face.items():
+        for i in range(len(owners)):
+            for j in range(i + 1, len(owners)):
+                a, b = owners[i], owners[j]
+                key = (a, b) if a < b else (b, a)
+                sl = shared_acc.get(key)
+                if sl is None:
+                    shared_acc[key] = {f}
+                else:
+                    sl.add(f)
+                adj[a].add(b); adj[b].add(a)
+    shared = {k: frozenset(v) for k, v in shared_acc.items()}
     cent = [torch.stack([V[int(v)] for v in b]).mean(0).tolist() for b in blks]
 
     def _theta(p):
@@ -128,7 +143,9 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
 
     cent_th = [_theta(c) for c in cent]
     cent_r = [float(np.hypot(c[0], c[1])) for c in cent]
-    fc_th = [[_theta(np.mean([[V[int(v), 0].item(), V[int(v), 1].item()] for v in f], axis=0))
+    Vn = V.numpy()
+    xy = [(float(Vn[i, 0]), float(Vn[i, 1])) for i in range(V.shape[0])]
+    fc_th = [[_theta(np.mean([[xy[v][0], xy[v][1]] for v in f], axis=0))
               for f in fb] for fb in fc]
 
     def pick(b, sgn, disjoint_from=()):

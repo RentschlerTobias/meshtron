@@ -219,7 +219,9 @@ def run_polytron(cfg, ep1=None, ep2=None, ep3=None, eval_n=150, gallery=6,
 
     vmodel = vh.VertexGen(VOCAB, d=cfg.d_model, max_len=max_len, start_id=START,
                           res_max=res_max).to(device)
-    pmodel = ph.PointerFaceModel(d_model=cfg.d_model, vert_feat_dim=vert_feat_dim).to(device)
+    pmodel = ph.PointerFaceModel(
+        d_model=cfg.d_model, vert_feat_dim=vert_feat_dim,
+        max_ptr=max(e[1].numel() for e in ex_p) + 8).to(device)
     gmodel = gh.GeomHeadModel(d_model=cfg.d_model, vert_feat_dim=vert_feat_dim,
                               geom_out_dim=geom_out_dim).to(device)
 

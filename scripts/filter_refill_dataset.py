@@ -15,6 +15,7 @@ Writes a flat list (compat with trainer + token builder).
 """
 
 import argparse
+import os
 import re
 import sys
 
@@ -28,8 +29,8 @@ def _faces8(s):
 
 
 def neg_tets(s):
-    sys.path.insert(0, "scripts")
-    from validate_3d_dataset import hex_tet_volumes
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from scripts.validate_3d_dataset import hex_tet_volumes
     v = hex_tet_volumes(_faces8(s).numpy(), s["vertices_cartesian"].numpy())
     return float(v[v < 0].sum())
 
@@ -83,7 +84,9 @@ def main():
 
     for dline in drop:
         print(dline)
-    torch.save(keep, a.out)
+    torch.save({"samples": keep,
+                "meta": {"source": a.src, "kept": len(keep), "dropped": len(drop)}},
+               a.out)
     print(f"wrote {a.out}: {len(keep)} samples kept, {len(drop)} dropped")
 
 

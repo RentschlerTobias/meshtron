@@ -72,31 +72,49 @@ def load_legacy_hexa(path):
             np.array(blk, dtype=np.int64) if blk else None)
 
 
+def _proc_one(i):
+    pts, hexas, blk = load_legacy_hexa(_PATHS[i].as_posix())
+    p = _PATHS[i]
+    m = re.search(r"_h([0-9.]+)\.vtk$", p.name)
+    level = m.group(1) if m else "?"
+    pv = to_cylindrical(pts)
+    s = {
+        "vertices_cartesian": torch.tensor(pts, dtype=torch.float64),
+        "vertices_polar": torch.tensor(pv, dtype=torch.float32),
+        "faces": torch.tensor(hexas.T, dtype=torch.long),  # [8, F]
+        "block_ids": None if blk is None else torch.tensor(blk),
+        "name": p.stem,
+        "level": level,
+        "blocks": int(hexas.shape[0]),
+    }
+    print(f"[{i+1}/{len(_PATHS)}] {p.name}: {hexas.shape[0]} hexes, {len(pts)} pts",
+          flush=True)
+    return s
+
+
+_PATHS = None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default="data/hex3d_algohex/deliverable")
     ap.add_argument("--pattern", default=r"T1_9_blocks_.*_h[0-9.]+\.vtk$")
     ap.add_argument("--out", default="data/hexarow_refill_ladder.pt")
+    ap.add_argument("--jobs", type=int, default=min(24, os.cpu_count() or 1))
     a = ap.parse_args()
 
-    paths = sorted(p for p in Path(a.src).glob("*.vtk")
-                   if re.match(a.pattern, p.name))
-    samples = []
-    for p in paths:
-        pts, hexas, blk = load_legacy_hexa(p)
-        m = re.search(r"_h([0-9.]+)\.vtk$", p.name)
-        level = m.group(1) if m else "?"
-        pv = to_cylindrical(pts)
-        samples.append({
-            "vertices_cartesian": torch.tensor(pts, dtype=torch.float64),
-            "vertices_polar": torch.tensor(pv, dtype=torch.float32),
-            "faces": torch.tensor(hexas.T, dtype=torch.long),  # [8, F]
-            "block_ids": None if blk is None else torch.tensor(blk),
-            "name": p.stem,
-            "level": level,
-            "blocks": int(hexas.shape[0]),
-        })
-        print(f"{p.name}: {hexas.shape[0]} hexes, {len(pts)} pts")
+    global _PATHS
+    _PATHS = sorted(p for p in Path(a.src).glob("*.vtk")
+                    if re.match(a.pattern, p.name))
+    print(f"{len(_PATHS)} files match")
+    if not _PATHS:
+        torch.save({"samples": [], "meta": {"source": "tfi.py refill sweep",
+                                            "n": 0}}, a.out)
+        return
+    import multiprocessing as mp
+    ctx = mp.get_context("fork")
+    with ctx.Pool(a.jobs) as pool:
+        samples = pool.map(_proc_one, range(len(_PATHS)), chunksize=1)
     torch.save({"samples": samples,
                 "meta": {"source": "tfi.py refill sweep", "n": len(samples)}},
                a.out)

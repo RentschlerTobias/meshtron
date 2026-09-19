@@ -1,0 +1,106 @@
+vocab=3078 pad=3077 dev=cuda dtype=torch.bfloat16
+bounds r=(0.5503001952171326, 1.8674164271354676) z=(-0.050000000000004534, 2.5500000000000003)
+672 train / 97 val | seq-len min 263 mean 445 max 609
+168 train batches (median 4, max 4 pro Batch) | 25 val batches
+Modell: d=512 layers=4 heads=4 params=15.2M
+epoch  0  loss 65.448  tok-acc 0.002  peakVRAM 0.59 GB  VAL loss 21.289 tok-acc 0.014  (1s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  1  loss 14.452  tok-acc 0.037  peakVRAM 0.59 GB  VAL loss 10.576 tok-acc 0.043  (3s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  2  loss 8.892  tok-acc 0.062  peakVRAM 0.59 GB  VAL loss 7.299 tok-acc 0.096  (5s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  3  loss 6.453  tok-acc 0.113  peakVRAM 0.59 GB  VAL loss 5.552 tok-acc 0.173  (8s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  4  loss 5.107  tok-acc 0.175  peakVRAM 0.59 GB  VAL loss 4.531 tok-acc 0.243  (10s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  5  loss 4.306  tok-acc 0.243  peakVRAM 0.59 GB  VAL loss 3.854 tok-acc 0.283  (12s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  6  loss 3.818  tok-acc 0.293  peakVRAM 0.59 GB  VAL loss 3.504 tok-acc 0.326  (14s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  7  loss 3.541  tok-acc 0.319  peakVRAM 0.59 GB  VAL loss 3.343 tok-acc 0.351  (16s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  8  loss 3.393  tok-acc 0.329  peakVRAM 0.59 GB  VAL loss 3.164 tok-acc 0.345  (17s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  9  loss 3.264  tok-acc 0.339  peakVRAM 0.59 GB  VAL loss 3.050 tok-acc 0.367  (19s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 10  loss 3.159  tok-acc 0.352  peakVRAM 0.59 GB  VAL loss 3.002 tok-acc 0.372  (21s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 11  loss 3.092  tok-acc 0.354  peakVRAM 0.59 GB  VAL loss 2.958 tok-acc 0.373  (23s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 12  loss 3.043  tok-acc 0.362  peakVRAM 0.59 GB  VAL loss 2.977 tok-acc 0.371  (25s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 13  loss 2.999  tok-acc 0.363  peakVRAM 0.59 GB  VAL loss 2.936 tok-acc 0.372  (27s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 14  loss 2.949  tok-acc 0.369  peakVRAM 0.59 GB  VAL loss 2.820 tok-acc 0.384  (29s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 15  loss 2.905  tok-acc 0.373  peakVRAM 0.59 GB  VAL loss 2.835 tok-acc 0.382  (30s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 16  loss 2.867  tok-acc 0.376  peakVRAM 0.59 GB  VAL loss 2.812 tok-acc 0.384  (32s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 17  loss 2.841  tok-acc 0.378  peakVRAM 0.59 GB  VAL loss 2.806 tok-acc 0.385  (34s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 18  loss 2.802  tok-acc 0.382  peakVRAM 0.59 GB  VAL loss 2.756 tok-acc 0.389  (36s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 19  loss 2.771  tok-acc 0.383  peakVRAM 0.59 GB  VAL loss 2.742 tok-acc 0.392  (39s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 20  loss 2.744  tok-acc 0.386  peakVRAM 0.59 GB  VAL loss 2.720 tok-acc 0.391  (41s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 21  loss 2.715  tok-acc 0.391  peakVRAM 0.59 GB  VAL loss 2.685 tok-acc 0.393  (44s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 22  loss 2.687  tok-acc 0.392  peakVRAM 0.59 GB  VAL loss 2.701 tok-acc 0.390  (47s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 23  loss 2.670  tok-acc 0.392  peakVRAM 0.59 GB  VAL loss 2.644 tok-acc 0.398  (51s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 24  loss 2.647  tok-acc 0.397  peakVRAM 0.59 GB  VAL loss 2.654 tok-acc 0.391  (54s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 25  loss 2.626  tok-acc 0.399  peakVRAM 0.59 GB  VAL loss 2.645 tok-acc 0.397  (57s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 26  loss 2.604  tok-acc 0.401  peakVRAM 0.59 GB  VAL loss 2.618 tok-acc 0.399  (59s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 27  loss 2.582  tok-acc 0.404  peakVRAM 0.59 GB  VAL loss 2.609 tok-acc 0.401  (62s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 28  loss 2.567  tok-acc 0.405  peakVRAM 0.59 GB  VAL loss 2.610 tok-acc 0.404  (65s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 29  loss 2.547  tok-acc 0.408  peakVRAM 0.59 GB  VAL loss 2.595 tok-acc 0.399  (67s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 30  loss 2.536  tok-acc 0.408  peakVRAM 0.59 GB  VAL loss 2.591 tok-acc 0.403  (71s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 31  loss 2.516  tok-acc 0.411  peakVRAM 0.59 GB  VAL loss 2.572 tok-acc 0.402  (74s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 32  loss 2.501  tok-acc 0.413  peakVRAM 0.59 GB  VAL loss 2.581 tok-acc 0.407  (76s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 33  loss 2.489  tok-acc 0.414  peakVRAM 0.59 GB  VAL loss 2.584 tok-acc 0.402  (80s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 34  loss 2.475  tok-acc 0.416  peakVRAM 0.59 GB  VAL loss 2.547 tok-acc 0.405  (83s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 35  loss 2.460  tok-acc 0.418  peakVRAM 0.59 GB  VAL loss 2.556 tok-acc 0.407  (85s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 36  loss 2.451  tok-acc 0.419  peakVRAM 0.59 GB  VAL loss 2.560 tok-acc 0.407  (89s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 37  loss 2.440  tok-acc 0.420  peakVRAM 0.59 GB  VAL loss 2.529 tok-acc 0.407  (93s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 38  loss 2.429  tok-acc 0.421  peakVRAM 0.59 GB  VAL loss 2.540 tok-acc 0.409  (95s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 39  loss 2.421  tok-acc 0.423  peakVRAM 0.59 GB  VAL loss 2.523 tok-acc 0.407  (98s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 40  loss 2.413  tok-acc 0.423  peakVRAM 0.59 GB  VAL loss 2.527 tok-acc 0.408  (102s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 41  loss 2.406  tok-acc 0.425  peakVRAM 0.59 GB  VAL loss 2.524 tok-acc 0.410  (104s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 42  loss 2.399  tok-acc 0.425  peakVRAM 0.59 GB  VAL loss 2.515 tok-acc 0.409  (107s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 43  loss 2.395  tok-acc 0.425  peakVRAM 0.59 GB  VAL loss 2.516 tok-acc 0.411  (111s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 44  loss 2.390  tok-acc 0.427  peakVRAM 0.59 GB  VAL loss 2.507 tok-acc 0.410  (114s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 45  loss 2.386  tok-acc 0.426  peakVRAM 0.59 GB  VAL loss 2.513 tok-acc 0.411  (116s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 46  loss 2.381  tok-acc 0.429  peakVRAM 0.59 GB  VAL loss 2.505 tok-acc 0.410  (120s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 47  loss 2.380  tok-acc 0.427  peakVRAM 0.59 GB  VAL loss 2.509 tok-acc 0.411  (123s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 48  loss 2.379  tok-acc 0.428  peakVRAM 0.59 GB  VAL loss 2.510 tok-acc 0.411  (125s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch 49  loss 2.377  tok-acc 0.429  peakVRAM 0.59 GB  VAL loss 2.511 tok-acc 0.411  (128s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+saved data/hexarow_batch_2-layer.pt (133s)

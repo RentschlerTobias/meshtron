@@ -1,0 +1,9 @@
+vocab=3078 pad=3077 dev=cuda dtype=torch.bfloat16
+bounds r=(0.5503001952171326, 1.8674164271354676) z=(-0.050000000000004534, 2.5500000000000003)
+672 train / 97 val | seq-len min 263 mean 445 max 609
+168 train batches (median 4, max 4 pro Batch) | 25 val batches
+Modell: d=512 layers=8 heads=4 params=27.8M
+epoch  0  loss 56.479  tok-acc 0.005  peakVRAM 1.01 GB  VAL loss 19.054 tok-acc 0.025  (2s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt
+epoch  1  loss 13.866  tok-acc 0.047  peakVRAM 1.01 GB  VAL loss 10.290 tok-acc 0.066  (5s)
+  checkpoint -> data/hexarow_batch_2l_ckpt.pt

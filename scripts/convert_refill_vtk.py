@@ -12,13 +12,17 @@ Usage:
 """
 
 import argparse
+import os
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 
 import numpy as np
 import torch
 
-from domain_extractor_3d import to_cylindrical
+from domain_extractor_3d import to_cylindrical  # noqa: E402  (repo root on sys.path)
 
 
 def load_legacy_hexa(path):

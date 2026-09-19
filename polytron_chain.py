@@ -186,17 +186,19 @@ def run_polytron(cfg, ep1=None, ep2=None, ep3=None, eval_n=150, gallery=6,
 
     torch.manual_seed(cfg.seed); np.random.seed(cfg.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tok = PolytronTokenizer(repr_mode=cfg.repr_mode, dim=cfg.dim,
-                            corners_per_block=cfg.corners_per_block)
-    Qr, Qa = tok.Qr, tok.Qa
-    START = Qr + 2 * Qa; STOP = Qr + 2 * Qa + 1; PAD = Qr + 2 * Qa + 2
-    VOCAB = Qr + 2 * Qa + 3
 
     print(f"Lade {cfg.data_path} ...")
     data = torch.load(cfg.data_path, weights_only=False)
     six = list(data)   # alle Meshes, jede Face-/Block-Zahl (kein FACECOUNTS-Filter mehr)
     if limit:
         six = six[:limit]
+    max_M = max(d['vertices_polar'].shape[0] for d in six)
+    tok = PolytronTokenizer(repr_mode=cfg.repr_mode, dim=cfg.dim,
+                            corners_per_block=cfg.corners_per_block,
+                            max_vertices=max_M)
+    Qr, Qa = tok.Qr, tok.Qa
+    START = Qr + 2 * Qa; STOP = Qr + 2 * Qa + 1; PAD = Qr + 2 * Qa + 2
+    VOCAB = Qr + 2 * Qa + 3
     from collections import Counter
     print(f"Meshes: {len(six)}  facecounts {dict(sorted(Counter(d['faces'].shape[1] for d in six).items()))}"
           f"  |  baue Beispiele (S1/S2/S3, index-aligned) ...")

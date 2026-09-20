@@ -28,11 +28,13 @@ from train_hexarow_full import GPTCond, sample_points
 # (Decode: nur 1 Token pro Schritt). FiLM-Conditioning passiert vor den
 # Blocks und ist sequenzunabhaengig -> gecachte K/V (post-Conditioning) korrekt.
 @torch.no_grad()
-def forward_cached(model: GPTCond, xs, pc, fc, kv: list, pos0: int):
+def forward_cached(model: GPTCond, xs, pc, fc, kv: list, pos0: int, slot=None):
     B, L = xs.shape
     dev = xs.device
     pos = torch.arange(pos0, pos0 + L, device=dev)
     h = model.tok(xs) + model.pos(pos)[None]
+    if slot is not None:
+        h = h + model.slot(slot)  # Slot-Embedding wie im Trainer (Paritaet!)
     D = h.shape[-1]
     c = model.condition(pc, fc)
     h = h * (1 + torch.tanh(c)[:, None]) + c[:, None]
@@ -81,15 +83,22 @@ def load_sample(obj, idx: int):
 
 @torch.no_grad()
 def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
-             top_k, dev, dtype):
-    """Autoregressives Sampling mit KV-Cache bis stop_token / Budget."""
+             top_k, dev, dtype, specials=(), use_slot=True):
+    """Autoregressives Sampling mit KV-Cache bis stop_token / Budget.
+    slot: Position im Vertex-Quant (0..3) des INPUT-Tokens je Schritt —
+    identische Semantik wie _slot_ids in train_hexarow_full (Parität)."""
     kv: list = [[None, None] for _ in model.blocks]
     seq = [start_id]
     pos0 = 0
+    cnt = 0  # non-special Tokens seit letztem Special (Quant-Positionszähler)
     while len(seq) < max_tokens:
         x = torch.tensor([[seq[-1]]], dtype=torch.long, device=dev)
+        s = torch.zeros((1, 1), dtype=torch.long, device=dev)
+        if use_slot:
+            s.fill_(cnt % 4)  # slots sind 0, wenn seq[-1] special (cnt==0)
         with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
-            logits = forward_cached(model, x, pc, fc, kv, pos0)
+            logits = forward_cached(model, x, pc, fc, kv, pos0,
+                                    slot=s if use_slot else None)
         pos0 += 1
         nxt_l = (logits[:, -1, :] / max(1e-9, temperature)).float()
         if top_k and top_k > 0:
@@ -106,6 +115,10 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
             print(f"warn: positional limit {pos_rows} ohne stop erreicht")
             break
         seq.append(nxt)
+        if nxt in specials:
+            cnt = 0
+        else:
+            cnt += 1
         if nxt == stop_id:
             break
     return seq
@@ -121,7 +134,10 @@ def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
     except AssertionError as e:
         rows, cur = [], []
         sep = tok.core.sep_token
+        ignore = {tok.core.sep2_token, tok.core.pad_token, tok.core.end_token}
         for t in toks[1:-1]:
+            if t in ignore:
+                continue  # Sonder-Tokens counten die Quant-Grammatik nicht
             if t == sep:
                 if cur:
                     rows.append(cur)
@@ -286,9 +302,14 @@ def main():
     fc = torch.tensor([float(blocks)], device=dev)
 
     # Generation
+    specials = {core.start_token, core.end_token, core.sep_token,
+                core.sep2_token, core.stop_token, core.pad_token}
+    use_slot = "slot.weight" in ck["model"]
+    if not use_slot:
+        print("note: CKPT ohne slot.weight (alter Trainer-Stand) -> decode ohne Slot-Embedding")
     seq = generate(model, pc, fc, core.start_token, core.stop_token,
                    core.sep_token, args.max_tokens, args.temperature,
-                   args.top_k, dev, dtype)
+                   args.top_k, dev, dtype, specials, use_slot)
     stopped = seq[-1] == core.stop_token
     print(f"generated tokens={len(seq)} (stop={'ja' if stopped else 'NEIN (cap)'}) "
           f"rows={seq.count(core.sep_token)}")

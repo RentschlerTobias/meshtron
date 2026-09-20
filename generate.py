@@ -144,6 +144,9 @@ def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
                 cur = []
             else:
                 cur.append(t)
+        if cur and toks[-1] != stop_id:
+            # abgebrochene Schlusszeile ohne sep: nur pruefen, nicht verlieren
+            rows.append(cur)
         valid, seen_first = [], False
         for r in rows:
             if not seen_first:
@@ -155,12 +158,15 @@ def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
             valid.append(r)
             seen_first = True
         if not valid:
-            raise
+            return None, str(e)
         trimmed = [toks[0]]
         for r in valid:
             trimmed += r + [sep]
         trimmed.append(stop_id)
-        return tok.detokenize(trimmed), str(e)
+        try:
+            return tok.detokenize(trimmed), str(e)
+        except AssertionError as e2:
+            return None, f"trim-Neuaufbau fehlgeschlagen: {e2}"
 
 
 # -------------------------------------------------------------------- Output
@@ -315,6 +321,11 @@ def main():
           f"rows={seq.count(core.sep_token)}")
 
     (vpt, blk), trim = detokenize_safe(seq, tok, core.stop_token)
+    if vpt is None:
+        print(f"DIAGNOSE: keine valide Row rekonstruierbar ({trim})")
+        print(f"  rows gesamt={seq.count(core.sep_token)}, "
+              f"tokens={len(seq)} -> fuer Detail-Analyse seq dumpen")
+        return
     if trim:
         print(f"WARN: Generation instabil, getrimmt: {trim}")
     print(f"reconstructed: verts={vpt.shape[0]} blocks={blk.shape[0]}")

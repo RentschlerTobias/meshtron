@@ -115,9 +115,12 @@ def main():
             if trim_warn is not None:
                 trim = True
                 counts["trim"] += 1
-            detok_ok = True
-            counts["detok_ok"] += 1
-            gen_blocks = int(blk.shape[0])
+            if _vpt is None:
+                print(f"{i:>3} {name:<24} blocks={blocks:<4} DETOK-FAIL: {trim_warn}")
+            else:
+                detok_ok = True
+                counts["detok_ok"] += 1
+                gen_blocks = int(blk.shape[0])
         except AssertionError as e:
             print(f"{i:>3} {name:<24} blocks={blocks:<4} ERROR detok: {e}")
 

@@ -81,12 +81,61 @@ def load_sample(obj, idx: int):
     raise ValueError(f"unbekanntes Mesh-Format in Sample {idx}")
 
 
+def slot_mask(tok, seq: list, cnt: int, vocab: int, coords: str) -> torch.Tensor:
+    """Constrained-Decoding-Maske: erlaubt je Schritt nur grammatikalisch
+    legale Tokens (Slot-Range + sep/stop nur an Row-/Stream-Grenzen)."""
+    core = tok.core
+    npt = 3 if coords == "cart" else 4
+    gsize = 4 * npt      # Vertex-Gruppe (1 Vert) = npt Tokens, Vert-Blockpaar = 2
+    head_n = 8 * npt     # Head-Row enthaelt 8 Verts (Entry+Exit-Ring)
+    if coords == "cart":
+        lo, hi = core.off_r, core.off_idx
+    else:
+        slot = cnt % npt
+        if slot == 1:
+            lo, hi = core.off_ts, core.off_tc
+        elif slot == 2:
+            lo, hi = core.off_tc, core.off_idx
+        else:  # r und z teilen denselben off_r-Quantizer
+            lo, hi = core.off_r, core.Qr
+    row_len, seen_sep = 0, False
+    for t in seq[1:]:
+        if t == core.sep_token:
+            seen_sep, row_len = True, 0
+        elif t == core.stop_token:
+            break
+        elif t in _SPECIAL_SET:
+            continue
+        else:
+            row_len += 1
+    m = torch.full((vocab,), float("-inf"))
+    m[lo:hi] = 0.0
+    at_group = row_len % gsize == 0 and row_len > 0
+    # erste Row endet erst nach komplettem Head-Block (2 Gruppen)
+    min_row = head_n if not seen_sep else gsize
+    if at_group and row_len >= min_row:
+        m[core.sep_token] = 0.0
+        m[core.stop_token] = 0.0
+    if seq[-1] == core.stop_token:
+        m[:] = float("-inf")
+        m[core.end_token] = 0.0
+    return m
+
+
+_SPECIAL_SET: set = set()
+
+
 @torch.no_grad()
 def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
-             top_k, dev, dtype, specials=(), use_slot=True):
+             top_k, dev, dtype, specials=(), use_slot=True, tok=None,
+             constrained=True, coords="polar"):
     """Autoregressives Sampling mit KV-Cache bis stop_token / Budget.
     slot: Position im Vertex-Quant (0..3) des INPUT-Tokens je Schritt —
-    identische Semantik wie _slot_ids in train_hexarow_full (Parität)."""
+    identische Semantik wie _slot_ids in train_hexarow_full (Parität).
+    constrained=True: Slot-Maske erzwingt Row-Grammatik (32/16-To-Rows,
+    sep/stop nur an legalen Stellen)."""
+    global _SPECIAL_SET
+    _SPECIAL_SET = set(specials)
     kv: list = [[None, None] for _ in model.blocks]
     seq = [start_id]
     pos0 = 0
@@ -95,12 +144,15 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
         x = torch.tensor([[seq[-1]]], dtype=torch.long, device=dev)
         s = torch.zeros((1, 1), dtype=torch.long, device=dev)
         if use_slot:
-            s.fill_(cnt % 4)  # slots sind 0, wenn seq[-1] special (cnt==0)
+            s.fill_(cnt % (3 if coords == "cart" else 4))
         with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
             logits = forward_cached(model, x, pc, fc, kv, pos0,
                                     slot=s if use_slot else None)
         pos0 += 1
         nxt_l = (logits[:, -1, :] / max(1e-9, temperature)).float()
+        if constrained and tok is not None:
+            nxt_l = nxt_l + slot_mask(tok, seq, cnt, nxt_l.shape[-1],
+                                      coords).to(nxt_l.device)
         if top_k and top_k > 0:
             kth = torch.topk(nxt_l, min(top_k, nxt_l.shape[-1]),
                              dim=-1).values.min(dim=-1, keepdim=True).values
@@ -121,6 +173,7 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
             cnt += 1
         if nxt == stop_id:
             break
+    _SPECIAL_SET = set()
     return seq
 
 
@@ -243,6 +296,11 @@ def main():
     ap.add_argument("--out", default="data/gen.vtk")
     ap.add_argument("--plot", default="data/gen.png")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dump-seq", default="",
+                    help="Token-Sequence als .pt dumpen (Detail-Analyse)")
+    ap.add_argument("--unconstrained", action="store_true",
+                    help="alte freie Sampling-Route (ohne Slot-Maske)")
+    ap.add_argument("--coords", default="polar", choices=["polar", "cart"])
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -315,16 +373,33 @@ def main():
         print("note: CKPT ohne slot.weight (alter Trainer-Stand) -> decode ohne Slot-Embedding")
     seq = generate(model, pc, fc, core.start_token, core.stop_token,
                    core.sep_token, args.max_tokens, args.temperature,
-                   args.top_k, dev, dtype, specials, use_slot)
+                   args.top_k, dev, dtype, specials, use_slot, tok=tok,
+                   constrained=not args.unconstrained, coords=args.coords)
     stopped = seq[-1] == core.stop_token
     print(f"generated tokens={len(seq)} (stop={'ja' if stopped else 'NEIN (cap)'}) "
           f"rows={seq.count(core.sep_token)}")
 
     res, trim = detokenize_safe(seq, tok, core.stop_token)
+    if args.dump_seq:
+        torch.save(torch.tensor(seq), args.dump_seq)
+        print(f"seq dumped: {args.dump_seq}")
     if res is None:
+        ignore = {core.sep2_token, core.pad_token, core.end_token}
+        rows, cur = [], []
+        for t in seq[1:]:
+            if t == core.stop_token:
+                break
+            if t in ignore:
+                continue
+            if t == core.sep_token:
+                rows.append(len(cur)); cur = []
+            else:
+                cur.append(t)
+        if cur and seq[-1] != core.stop_token:
+            rows.append(len(cur))
         print(f"DIAGNOSE: keine valide Row rekonstruierbar ({trim})")
-        print(f"  rows gesamt={seq.count(core.sep_token)}, "
-              f"tokens={len(seq)} -> fuer Detail-Analyse seq dumpen")
+        print(f"  rows gesamt={seq.count(core.sep_token)}, tokens={len(seq)}, "
+              f"row-laengen={rows} -> fuer Detail-Analyse seq dumpen")
         return
     vpt, blk = res
     if trim:

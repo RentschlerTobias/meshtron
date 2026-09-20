@@ -320,12 +320,13 @@ def main():
     print(f"generated tokens={len(seq)} (stop={'ja' if stopped else 'NEIN (cap)'}) "
           f"rows={seq.count(core.sep_token)}")
 
-    (vpt, blk), trim = detokenize_safe(seq, tok, core.stop_token)
-    if vpt is None:
+    res, trim = detokenize_safe(seq, tok, core.stop_token)
+    if res is None:
         print(f"DIAGNOSE: keine valide Row rekonstruierbar ({trim})")
         print(f"  rows gesamt={seq.count(core.sep_token)}, "
               f"tokens={len(seq)} -> fuer Detail-Analyse seq dumpen")
         return
+    vpt, blk = res
     if trim:
         print(f"WARN: Generation instabil, getrimmt: {trim}")
     print(f"reconstructed: verts={vpt.shape[0]} blocks={blk.shape[0]}")

@@ -111,13 +111,14 @@ def main():
 
         detok_ok, trim, gen_blocks = False, False, 0
         try:
-            (_vpt, blk), trim_warn = detokenize_safe(seq, tok, core.stop_token)
+            res, trim_warn = detokenize_safe(seq, tok, core.stop_token)
             if trim_warn is not None:
                 trim = True
                 counts["trim"] += 1
-            if _vpt is None:
+            if res is None:
                 print(f"{i:>3} {name:<24} blocks={blocks:<4} DETOK-FAIL: {trim_warn}")
             else:
+                _vpt, blk = res
                 detok_ok = True
                 counts["detok_ok"] += 1
                 gen_blocks = int(blk.shape[0])

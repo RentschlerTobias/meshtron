@@ -154,7 +154,7 @@ def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
             else:
                 ok = len(r) >= 16 and len(r) % 4 == 0
             if not ok:
-                break
+                continue  # kaputte Row (v.a. fuehrendes Fragment) ueberspringen
             valid.append(r)
             seen_first = True
         if not valid:

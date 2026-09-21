@@ -18,6 +18,8 @@ dependencies = [
     "gmsh>=4.15",
     "textual>=8.2.8",
     "plotly>=7.1.0",
+    "scipy>=1.18.1",
+    "meshio>=5.3.5",
 ]
 
 # openmesh braucht Kompilierung (C++), nur von den half_edge-Modulen genutzt, NICHT

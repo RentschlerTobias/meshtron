@@ -33,6 +33,13 @@ def main() -> None:
     inverted_result = validate_generated_mesh(vertices, inverted)
     assert not inverted_result.valid
     assert inverted_result.n_inverted_blocks == 1
+    assert inverted_result.n_folded_blocks >= 1
+
+    folded = blocks.copy()
+    folded[0, 0], folded[0, 6] = folded[0, 6], folded[0, 0]
+    folded_result = validate_generated_mesh(vertices, folded)
+    assert not folded_result.valid
+    assert folded_result.n_folded_blocks >= 1
 
     count_result = validate_generated_mesh(vertices, blocks, expected_blocks=2)
     assert not count_result.valid

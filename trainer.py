@@ -348,11 +348,12 @@ class Trainer:
             batch_size=self.cfg.batch_size,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory and torch.cuda.is_available(),
-            drop_last=True,
             worker_init_fn=worker_init_fn if self.cfg.num_workers > 0 else None,
         )
 
-        train_loader = DataLoader(train_dataset, shuffle=True, generator=gen, **common)
+        train_loader = DataLoader(
+            train_dataset, shuffle=True, generator=gen, drop_last=True, **common
+        )
         val_loader = DataLoader(val_dataset, shuffle=False, **common)
 
         max_length = max(train_dataset.max_seq_length, val_dataset.max_seq_length)

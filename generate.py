@@ -126,6 +126,10 @@ def slot_mask(tok, seq: list, cnt: int, vocab: int, coords: str) -> torch.Tensor
     if at_group and row_len >= min_row:
         m[core.sep_token] = 0.0
         m[core.stop_token] = 0.0
+    if seq[-1] == core.sep_token:
+        # an der Row-Grenze direkt nach SEP ist Stream-Ende legal; ohne diesen
+        # Zweig erzwingt der r-Slot ein Koordinaten-Token und STOP kann nie kommen
+        m[core.stop_token] = 0.0
     if seq[-1] == core.stop_token:
         m[:] = float("-inf")
         m[core.end_token] = 0.0
@@ -331,10 +335,11 @@ def main() -> int:
     rb = tuple(float(v) for v in ck["r_bounds"])
     zb = tuple(float(v) for v in ck["z_bounds"])
     max_len = int(ck["model"]["pos.weight"].shape[0])
-    if args.max_tokens > max_len - 2:
+    # Cap exakt max_len-1: eine Pos bleibt fuer das finale STOP (sonst schneidet der Cap es ab)
+    if args.max_tokens > max_len - 1:
         print(f"note: --max-tokens {args.max_tokens} > pos-Matrix ({max_len}) "
-              f"-> gekappt auf {max_len - 2} (sonst pos-Embedding-Overlauf)")
-        args.max_tokens = max_len - 2
+              f"-> gekappt auf {max_len - 1} (sonst pos-Embedding-Overlauf)")
+        args.max_tokens = max_len - 1
     print(f"ckpt d={cfg['d']} L={cfg['layers']} H={cfg['heads']} | bounds r={rb} z={zb} | coords={coords} npt={npt}")
 
     model = GPTCond(ck["vocab"], cfg["d"], cfg["layers"], cfg["heads"], max_len,

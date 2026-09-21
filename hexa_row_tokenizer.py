@@ -12,10 +12,13 @@ Design (mit User festgelegt):
     kanonischer Ring) + Exit-Ring (4 Verts, axial zum Entry-Ring gepaart),
     jedes Folgende nur seine Exit-Ring-Tokens (Entry ist exakt die Exit-Face
     des Vorgaengers). EOR (sep_token) nach jeder Row, stop_token am Ende.
-  - Winding/Pairing: Entry- und Exit-Ring starten am je lex-min-Vertex
-    (x,z) mit derselben Ringrichtung: Newell-Normale entlang der Row-
-    Richtung (Entry->Exit). Exit-Ring startet zusaetzlich am axialen
-    Pair des Entry-Ring-Starts (Rotation ohne Richtungswechsel).
+  - Winding/Pairing: Entry- und Exit-Ring sind Ringe GEGENUEBERLIEGENDER
+    Faces. Der Entry-Ring wird lex-min/Newell-nach-Exit orientiert, der
+    Exit-Ring folgt dem axialen Pairing (exit_seq[i] = axialer Partner von
+    entry_seq[i]) -> emit[b] ist per Konstruktion eine gueltige VTK-Relabelung.
+    Folgebloecke uebernehmen den Exit-Ring des Vorgaengers EXAKT als Entry
+    (Rotation ODER Reversal); ohne paarungskonsistente Fortsetzung bricht die
+    Row und der Block startet als frischer Head (volle 8 Verts, SEP davor).
 
 Token-Stream: [start] block1(8V=32tok) [block2(4V=16tok)]... [sep(EOR)]
                [block...] [sep] ... [stop]
@@ -36,6 +39,7 @@ class DegenerateBlockError(ValueError):
     pass
 
 from polytron_tokenizer import PolytronTokenizer
+from mesh_validation import hex_min_jacobian, hex_signed_volumes
 
 
 # ---------------------------------------------------------------- Ring-Logik
@@ -75,6 +79,11 @@ def _rotate_orient_ring(order, pts, target):
     if float(np.dot(n, np.asarray(target))) < 0:
         rot = [rot[0]] + rot[:0:-1]
     return rot
+
+
+def _is_rotation(a, b):
+    """True wenn b eine zyklische Rotation von a ist (gleiche Ringordnung)."""
+    return len(a) == 4 and len(b) == 4 and any(a == b[k:] + b[:k] for k in range(4))
 
 
 def _axial_pairing(entry_ids, exit_ids, edge_index):
@@ -246,8 +255,16 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
             walk_faces.update(chain_faces)
 
     # ---- Emission-Reihenfolge ( nutzt die beim Walk bestimmten Faces ) ----
+    # Entry-Ring lex-min/Newell nach Exit orientiert, Exit-Ring als axiales
+    # Pairing-Follow des Entry-Rings -> emit[b] ist eine gueltige VTK-Relabelung.
+    # Folgebloecke erben den Exit-Ring des Vorgaengers exakt als Entry-Ring
+    # (Rotation ODER Reversal); ohne paarungskonsistente Fortsetzung bricht die
+    # Row und der Block startet als frischer Head (volle 8 Verts, SEP davor).
     emit = [None] * F
+    out_rows: list[list[int]] = []
     for row in rows:
+        cur_row: list[int] = []
+        prev_exit: list[int] | None = None
         for b in row:
             entry_ids, exit_face = walk_faces[b]
             exit_ids_list = [int(v) for v in exit_face]
@@ -255,31 +272,50 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
                 raise AssertionError(
                     f"entry/exit faces ueberlappen: block {b} row={row} "
                     f"entry_ids={entry_ids} exit={exit_ids_list}")
-            assert not (set(entry_ids) & set(exit_ids_list)), "entry/exit faces ueberlappen"
             e_pts = np.stack([V[i].tolist() for i in entry_ids])
             x_pts = np.stack([V[i].tolist() for i in exit_ids_list])
 
-            # Entry-Ring: min-Umfang, lex-min Start, Normale in den Block
+            # Referenz-Entry-Ring: min-Umfang, lex-min Start, Normale zu Exit
             perm_e = _ring_min_perimeter(e_pts)
             rot_e = _rotate_orient_ring(perm_e, e_pts, x_pts.mean(0) - e_pts.mean(0))
-            entry_seq = [entry_ids[p] for p in rot_e]
+            entry_ref = [entry_ids[p] for p in rot_e]
+            pairs = (_axial_pairing(entry_ref, exit_ids_list, edges)
+                     if edges.numel() > 0 else {})
 
-            # Exit-Ring: gleiche Newell-Richtung wie Entry, Start am axialen Partner
-            exit_seq = None
-            if edges.numel() > 0:
-                pairs = _axial_pairing(entry_seq, exit_ids_list, edges)
-                if len(pairs) == 4 and pairs[int(entry_seq[0])] in exit_ids_list:
-                    anchor = pairs[int(entry_seq[0])]
-                    perm_x = _rotate_orient_ring(_ring_min_perimeter(x_pts),
-                                                 x_pts, x_pts.mean(0) - e_pts.mean(0))
-                    k = perm_x.index(exit_ids_list.index(anchor))
-                    exit_seq = [exit_ids_list[perm_x[(k + s) % 4]] for s in range(4)]
-            if exit_seq is None:  # Fallback: lex (x,z) Reihenfolge der Exit-Verts
+            def _follow(seq, pairs=pairs):
+                if len(pairs) == 4 and all(int(e) in pairs for e in seq):
+                    return [int(pairs[int(e)]) for e in seq]
+                return None
+
+            entry_seq = None
+            if prev_exit is not None:
+                if _is_rotation(entry_ref, prev_exit):
+                    entry_seq = list(prev_exit)
+                elif _is_rotation(list(reversed(entry_ref)), prev_exit):
+                    # Reversal: Ringrichtung dreht mit, Pairing-Follow bleibt
+                    # orientierungstreu -> Positivitaet verifizieren, sonst Break.
+                    seq = list(prev_exit)
+                    ex = _follow(seq)
+                    if ex is not None:
+                        pts8 = np.stack([V[int(v)].tolist() for v in seq + ex])[None]
+                        if (float(hex_signed_volumes(pts8)[0]) > 0.0
+                                and float(hex_min_jacobian(pts8)[0]) > -1e-9):
+                            entry_seq = seq
+            if entry_seq is None:
+                if prev_exit is not None and cur_row:  # Break: neue Row
+                    out_rows.append(cur_row)
+                    cur_row = []
+                entry_seq = entry_ref
+            exit_seq = _follow(entry_seq)
+            if exit_seq is None:  # Fallback ohne Wireframe: lex (x,z)
                 exit_seq = [exit_ids_list[p] for p in
                             sorted(range(4), key=lambda p: (x_pts[p][0], x_pts[p][2]))]
             emit[b] = list(entry_seq) + list(exit_seq)
-            entry_ids = list(exit_ids_list)  # naechster Block erbt Exit-Face als Entry
-    return rows, emit
+            prev_exit = emit[b][4:8]
+            cur_row.append(b)
+        if cur_row:
+            out_rows.append(cur_row)
+    return out_rows, emit
 
 
 # ---------------------------------------------------------------- Tokenizer

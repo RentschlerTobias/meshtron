@@ -443,8 +443,9 @@ def main() -> int:
     if xyz is not None:
         r01, s01, c01, z01 = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3]
         pc_th = np.arctan2(s01, c01)
-        pc_cart = np.stack([rb[0] + r01 * (rb[1] - rb[0]) * np.cos(pc_th),
-                            rb[0] + r01 * (rb[1] - rb[0]) * np.sin(pc_th),
+        pc_r = rb[0] + r01 * (rb[1] - rb[0])
+        pc_cart = np.stack([pc_r * np.cos(pc_th),
+                            pc_r * np.sin(pc_th),
                             zb[0] + z01 * (zb[1] - zb[0])], axis=-1)
     write_vtk(args.out, vcart, blk.tolist(), pc_cart)
     print(f"saved {args.out}")

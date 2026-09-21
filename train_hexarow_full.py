@@ -21,6 +21,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+import conditioning
 from hexa_row_tokenizer import HexaRowTokenizer
 
 
@@ -270,7 +271,12 @@ def weighted_loss(logits, tgt, w, pad_id, vocab, lossf):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tokens", default="data/hexarow_tokens_3d_full_aug.pt")
-    ap.add_argument("--src", default="data/polytron_data_3d_full_aug.pt")
+    ap.add_argument("--src", default=None,
+                    help="Source-.pt fuer den Eckpunkt-Fallback; optional, wenn "
+                         "--tokens eingebettete surface_points/is_blade traegt")
+    ap.add_argument("--blade-weight", type=float, default=3.0,
+                    help="Oversampling-Faktor fuer Blade-Punkte (geteiltes "
+                         "conditioning.build_cloud, nur bei eingebettetem Sample)")
     ap.add_argument("--d", type=int, default=512)
     ap.add_argument("--layers", type=int, default=12)
     ap.add_argument("--heads", type=int, default=8)
@@ -317,12 +323,13 @@ def main():
     coords = args.coords or ds.get("coords", "polar")
     npt = 3 if coords == "cart" else 4  # cart: x,y,z je [0,Qr); polar: r,sin,cos,z
     args.coords = coords
-    src = torch.load(args.src, weights_only=False)
-    if isinstance(src, dict):
-        src = src["samples"]
     name2sample = {}
-    for i, s in enumerate(src):
-        name2sample[s.get("name", f"sample{i}")] = s
+    if args.src:
+        src = torch.load(args.src, weights_only=False)
+        if isinstance(src, dict):
+            src = src["samples"]
+        for i, s in enumerate(src):
+            name2sample[s.get("name", f"sample{i}")] = s
     rb, zb = ds["r_bounds"], ds["z_bounds"]
     rb = tuple(float(v) for v in rb)
     zb = tuple(float(v) for v in zb)
@@ -335,10 +342,18 @@ def main():
         for s in lst:
             if args.maxblocks and s["blocks"] > args.maxblocks:
                 continue
-            raw = name2sample.get(s["name"])
-            if raw is None:
-                continue
-            pts = sample_points(surface_cloud(raw), args.n_points, rb, zb, rng)
+            if s.get("surface_points") is not None and s.get("is_blade") is not None:
+                # Familie: geteilte Conditioning-Quelle, identische Args wie generate.py
+                pts, _ = conditioning.build_cloud(
+                    s, args.n_points, rb, zb, rng,
+                    blade_weight=args.blade_weight)
+            else:
+                raw = name2sample.get(s["name"])
+                if raw is None:
+                    raise ValueError(
+                        f"kein Conditioning fuer Item '{s['name']}': weder "
+                        f"surface_points/is_blade eingebettet noch Treffer in --src")
+                pts = sample_points(surface_cloud(raw), args.n_points, rb, zb, rng)
             base = {"points": pts, "blocks": s["blocks"], "name": s["name"]}
             toks = s["tokens"].tolist()
             if args.window > 0 and len(toks) > args.window:
@@ -359,6 +374,12 @@ def main():
     print(f"{len(train_items)} train / {len(val_items)} val | seq-len min {lens.min()} "
           f"mean {int(lens.mean())} max {lens.max()}")
     max_len = int(lens.max())
+    pos_bound = max_len + 1  # GPTCond pos-Embedding
+    cap_src = f"--window {args.window}" if args.window > 0 else "daten-max"
+    over = [it["name"] for it in train_items + val_items if len(it["tokens"]) >= pos_bound]
+    print(f"pos-bound {pos_bound} (bindende Kappung {cap_src}) | laengstes Item {max_len}")
+    if over:
+        print(f"WARN: {len(over)} Item(s) >= pos-bound, erstes: {over[0]}")
 
     train_batches = make_batches(train_items, args.token_budget, args.batch_cap)
     val_batches = make_batches(val_items, args.token_budget, args.batch_cap)

@@ -19,6 +19,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+import conditioning
 from hexa_row_tokenizer import HexaRowTokenizer
 from mesh_validation import validate_generated_mesh
 from train_hexarow_full import GPTCond, sample_points
@@ -303,6 +304,11 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ckpt", default="data/hexarow_full_model_3090.pt")
     ap.add_argument("--mesh", default="", help=".pt (Sample-Liste/-dict, rohe xyz)")
+    ap.add_argument("--tokens", default="",
+                    help="Familie-Tokens.pt; --idx loest darin auf und nutzt den "
+                         "geteilten Conditioning-Pfad (conditioning.build_cloud)")
+    ap.add_argument("--blade-weight", type=float, default=3.0,
+                    help="Blade-Oversampling im geteilten conditioning.build_cloud")
     ap.add_argument("--src", default="data/polytron_data_3d_full_aug.pt")
     ap.add_argument("--idx", type=int, default=-1)
     ap.add_argument("--blocks", type=int, default=-1,
@@ -356,8 +362,18 @@ def main() -> int:
     core = tok.core
 
     # Quelle / Conditioning
-    gt, xyz, surf = None, None, None
-    if args.mesh:
+    gt, xyz, surf, cond_sample = None, None, None, None
+    if args.tokens:
+        if args.idx < 0:
+            ap.error("--tokens braucht --idx")
+        tds = torch.load(args.tokens, weights_only=False)
+        order = list(tds["train"]) + list(tds["val"])
+        if not 0 <= args.idx < len(order):
+            ap.error(f"--idx {args.idx} ausserhalb 0..{len(order) - 1}")
+        cond_sample = order[args.idx]
+        name = cond_sample.get("name", f"sample{args.idx}")
+        blocks = int(cond_sample["blocks"])
+    elif args.mesh:
         obj = torch.load(args.mesh, weights_only=False)
         if isinstance(obj, dict) and 'samples' in obj:
             obj = obj['samples']
@@ -383,7 +399,11 @@ def main() -> int:
     print(f"mesh={name} blocks={blocks}")
 
     rng = np.random.default_rng(args.seed)
-    if xyz is not None:
+    if cond_sample is not None:
+        # geteilter Conditioning-Pfad, identische Args wie train_hexarow_full.prep
+        pts, _ = conditioning.build_cloud(cond_sample, args.n_points, rb, zb, rng,
+                                          blade_weight=args.blade_weight)
+    elif xyz is not None:
         cloud_xyz = surf if surf is not None else xyz
         pts = sample_points(mesh_to_polar(cloud_xyz), args.n_points, rb, zb, rng)
     else:

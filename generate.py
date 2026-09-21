@@ -90,7 +90,7 @@ def slot_mask(tok, seq: list, cnt: int, vocab: int, coords: str) -> torch.Tensor
     gsize = 4 * npt      # Vertex-Gruppe (1 Vert) = npt Tokens, Vert-Blockpaar = 2
     head_n = 8 * npt     # Head-Row enthaelt 8 Verts (Entry+Exit-Ring)
     if coords == "cart":
-        lo, hi = core.off_r, core.off_idx
+        lo, hi = core.off_r, core.Qr
     else:
         slot = cnt % npt
         if slot == 1:
@@ -131,10 +131,10 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
              top_k, dev, dtype, specials=(), use_slot=True, tok=None,
              constrained=True, coords="polar"):
     """Autoregressives Sampling mit KV-Cache bis stop_token / Budget.
-    slot: Position im Vertex-Quant (0..3) des INPUT-Tokens je Schritt —
-    identische Semantik wie _slot_ids in train_hexarow_full (Parität).
-    constrained=True: Slot-Maske erzwingt Row-Grammatik (32/16-To-Rows,
-    sep/stop nur an legalen Stellen)."""
+    slot: EIGENER Slot (0..npt-1) des gefuetterten Tokens — deckungsgleich zur
+    batchify-eigenen-Slot-Konvention in train_hexarow_full
+    (0 wenn cnt==0 sonst (cnt-1)%npt). constrained=True: Slot-Maske erzwingt
+    Row-Grammatik (32/16-To-Rows, sep/stop nur an legalen Stellen)."""
     global _SPECIAL_SET
     _SPECIAL_SET = set(specials)
     kv: list = [[None, None] for _ in model.blocks]
@@ -145,7 +145,7 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
         x = torch.tensor([[seq[-1]]], dtype=torch.long, device=dev)
         s = torch.zeros((1, 1), dtype=torch.long, device=dev)
         if use_slot:
-            s.fill_(cnt % (3 if coords == "cart" else 4))
+            s.fill_(0 if cnt == 0 else (cnt - 1) % (3 if coords == "cart" else 4))
         with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
             logits = forward_cached(model, x, pc, fc, kv, pos0,
                                     slot=s if use_slot else None)
@@ -178,13 +178,17 @@ def generate(model, pc, fc, start_id, stop_id, sep_id, max_tokens, temperature,
     return seq
 
 
-def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
+def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int,
+                    coords: str = "polar"):
     """Detokenize; bei unvollstaendiger Schluss-Row: Zeilen validieren und an
     der ersten unvollstaendigen Zeile trimmen."""
+    npt = 3 if coords == "cart" else 4
+    head_n = 8 * npt
+    cont_n = 4 * npt
     if toks[-1] != stop_id:
         toks = toks + [stop_id]
     try:
-        return tok.detokenize(toks), None
+        return tok.detokenize(toks, coords=coords), None
     except AssertionError as e:
         rows, cur = [], []
         sep = tok.core.sep_token
@@ -204,9 +208,9 @@ def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
         valid, seen_first = [], False
         for r in rows:
             if not seen_first:
-                ok = len(r) >= 32 and (len(r) - 32) % 4 == 0
+                ok = len(r) >= head_n and (len(r) - head_n) % npt == 0
             else:
-                ok = len(r) >= 16 and len(r) % 4 == 0
+                ok = len(r) >= cont_n and len(r) % npt == 0
             if not ok:
                 continue  # kaputte Row (v.a. fuehrendes Fragment) ueberspringen
             valid.append(r)
@@ -218,7 +222,7 @@ def detokenize_safe(toks: list, tok: HexaRowTokenizer, stop_id: int):
             trimmed += r + [sep]
         trimmed.append(stop_id)
         try:
-            return tok.detokenize(trimmed), str(e)
+            return tok.detokenize(trimmed, coords=coords), str(e)
         except AssertionError as e2:
             return None, f"trim-Neuaufbau fehlgeschlagen: {e2}"
 
@@ -301,7 +305,8 @@ def main() -> int:
                     help="Token-Sequence als .pt dumpen (Detail-Analyse)")
     ap.add_argument("--unconstrained", action="store_true",
                     help="alte freie Sampling-Route (ohne Slot-Maske)")
-    ap.add_argument("--coords", default="polar", choices=["polar", "cart"])
+    ap.add_argument("--coords", default=None, choices=["polar", "cart"],
+                    help="Override der CKPT-Koordinaten (None = aus CKPT)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -310,6 +315,10 @@ def main() -> int:
 
     ck = torch.load(args.ckpt, weights_only=False)
     cfg = ck["cfg"]
+    coords = (ck.get("coords")
+              or (cfg.get("coords") if isinstance(cfg, dict) else None)
+              or args.coords or "polar")
+    npt = 3 if coords == "cart" else 4
     rb = tuple(float(v) for v in ck["r_bounds"])
     zb = tuple(float(v) for v in ck["z_bounds"])
     max_len = int(ck["model"]["pos.weight"].shape[0])
@@ -317,10 +326,11 @@ def main() -> int:
         print(f"note: --max-tokens {args.max_tokens} > pos-Matrix ({max_len}) "
               f"-> gekappt auf {max_len - 2} (sonst pos-Embedding-Overlauf)")
         args.max_tokens = max_len - 2
-    print(f"ckpt d={cfg['d']} L={cfg['layers']} H={cfg['heads']} | bounds r={rb} z={zb}")
+    print(f"ckpt d={cfg['d']} L={cfg['layers']} H={cfg['heads']} | bounds r={rb} z={zb} | coords={coords} npt={npt}")
 
     model = GPTCond(ck["vocab"], cfg["d"], cfg["layers"], cfg["heads"], max_len,
-                    ck["pad_id"], 0.0, cfg["n_points"], cfg["n_latent"]).to(dev)
+                    ck["pad_id"], 0.0, cfg["n_points"], cfg["n_latent"],
+                    npt=npt).to(dev)
     missing = model.load_state_dict(ck["model"], strict=False)
     # CKPTs vom Trainer-Stand < Slot-Upgrade enthalten slot.weight nicht
     # (Forward ohne slot-Arg nutzt es nicht) -> nur das ist veraendert ok.
@@ -375,12 +385,12 @@ def main() -> int:
     seq = generate(model, pc, fc, core.start_token, core.stop_token,
                    core.sep_token, args.max_tokens, args.temperature,
                    args.top_k, dev, dtype, specials, use_slot, tok=tok,
-                   constrained=not args.unconstrained, coords=args.coords)
+                   constrained=not args.unconstrained, coords=coords)
     stopped = seq[-1] == core.stop_token
     print(f"generated tokens={len(seq)} (stop={'ja' if stopped else 'NEIN (cap)'}) "
           f"rows={seq.count(core.sep_token)}")
 
-    res, trim = detokenize_safe(seq, tok, core.stop_token)
+    res, trim = detokenize_safe(seq, tok, core.stop_token, coords=coords)
     if args.dump_seq:
         torch.save(torch.tensor(seq), args.dump_seq)
         print(f"seq dumped: {args.dump_seq}")
@@ -408,9 +418,10 @@ def main() -> int:
     print(f"reconstructed: verts={vpt.shape[0]} blocks={blk.shape[0]}")
 
     v_np = vpt.numpy()
-    vcart = np.stack([v_np[:, 0] * np.cos(v_np[:, 1]),
-                      v_np[:, 0] * np.sin(v_np[:, 1]),
-                      v_np[:, 2]], axis=-1)
+    vcart = (v_np if coords == "cart"
+             else np.stack([v_np[:, 0] * np.cos(v_np[:, 1]),
+                            v_np[:, 0] * np.sin(v_np[:, 1]),
+                            v_np[:, 2]], axis=-1))
     validation = validate_generated_mesh(vcart, blk.numpy(), expected_blocks=blocks)
     if not validation.valid:
         print("INVALID GENERATED MESH: " + "; ".join(validation.errors))

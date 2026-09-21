@@ -81,13 +81,13 @@ class GPTCond(nn.Module):
     gegeben."""
 
     def __init__(self, vocab, d, layers, heads, max_len, pad_id, dropout,
-                 n_points, n_latent):
+                 n_points, n_latent, npt=4):
         super().__init__()
         self.pad_id = pad_id
         self.tok = nn.Embedding(vocab, d, padding_idx=pad_id)
         self.pos = nn.Embedding(max_len, d)
         # PolyGen-Style coordinate-type embedding: Slot im Vertex (0=r,1=sin,2=cos,3=z)
-        self.slot = nn.Embedding(4, d)
+        self.slot = nn.Embedding(npt, d)
         self.drop = nn.Dropout(dropout)
         self.penc = PointEncoder(d, n_latent, dim=4)
         self.fc_emb = nn.Sequential(nn.Linear(1, d),
@@ -115,9 +115,9 @@ class GPTCond(nn.Module):
         return self.head(self.ln(h))
 
 
-def _unit_weights(tokens, specials, w_unit_end):
-    """Pro Token: 1.0 oder w_unit_end am letzten Token eines 4er-Vertex-Quants.
-    zwischen start/sep/stop kommen ausschliesslich Quants in 4er-Gruppen
+def _unit_weights(tokens, specials, w_unit_end, npt=4):
+    """Pro Token: 1.0 oder w_unit_end am letzten Token eines npt-Token-Vertex-Quants.
+    zwischen start/sep/stop kommen ausschliesslich Quants in npt-Gruppen
     (Emissions-Grammatik), specials tragen Gewicht 1.0."""
     w = []
     cnt = 0
@@ -126,13 +126,13 @@ def _unit_weights(tokens, specials, w_unit_end):
             w.append(1.0)
             cnt = 0
         else:
-            w.append(w_unit_end if cnt % 4 == 3 else 1.0)
+            w.append(w_unit_end if cnt % npt == npt - 1 else 1.0)
             cnt += 1
     return w
 
 
-def _slot_ids(tokens, specials):
-    """PolyGen coordinate-type: Slot im Vertex-Quant (0..3); specials -> 0."""
+def _slot_ids(tokens, specials, npt=4):
+    """PolyGen coordinate-type: Slot im Vertex-Quant (0..npt-1); specials -> 0."""
     s = []
     cnt = 0
     for t in tokens:
@@ -140,14 +140,15 @@ def _slot_ids(tokens, specials):
             s.append(0)
             cnt = 0
         else:
-            s.append(cnt % 4)
+            s.append(cnt % npt)
             cnt += 1
     return s
 
 
-def batchify(items, pad_id, device, specials=(), w_unit_end=1.0):
+def batchify(items, pad_id, device, specials=(), w_unit_end=1.0, npt=4):
     """items: list of {tokens, points, blocks} -> tensors x, slot, w, pc, fc.
-    slot/w belang zur Zielsequenz x[:,1:] (shifted um 1)."""
+    slot/w tragen am Token j dessen EIGENEN Slot (npt-Zyklus), nicht den des
+    Vorgaengers — deckungsgleich zur Feed-Konvention in generate.py."""
     L = max(len(it["tokens"]) for it in items)
     x = torch.full((len(items), L), pad_id, dtype=torch.long)
     slot = torch.zeros((len(items), L), dtype=torch.long)
@@ -155,12 +156,11 @@ def batchify(items, pad_id, device, specials=(), w_unit_end=1.0):
     for i, it in enumerate(items):
         tk = it["tokens"]
         x[i, : len(tk)] = torch.as_tensor(tk, dtype=torch.long)
-        if len(tk) > 1:
-            slot[i, 1 : len(tk)] = torch.as_tensor(_slot_ids(tk[:-1], specials),
-                                                   dtype=torch.long)
-            w[i, 1 : len(tk)] = torch.as_tensor(
-                _unit_weights(tk[:-1], specials, w_unit_end),
-                dtype=torch.float32)
+        slot[i, : len(tk)] = torch.as_tensor(_slot_ids(tk, specials, npt),
+                                             dtype=torch.long)
+        w[i, : len(tk)] = torch.as_tensor(
+            _unit_weights(tk, specials, w_unit_end, npt),
+            dtype=torch.float32)
     pc = torch.as_tensor(np.stack([it["points"] for it in items]), dtype=torch.float32)
     fc = torch.as_tensor([it["blocks"] for it in items], dtype=torch.float32)
     return x.to(device), slot.to(device), w.to(device), pc.to(device), fc.to(device)
@@ -224,12 +224,12 @@ def make_batches(items, budget=16384, cap=32):
 
 @torch.no_grad()
 def evaluate(model, batches, items, pad_id, vocab, dev, lossf, dtype,
-             w_unit_end=1.0, specials=()):
+             w_unit_end=1.0, specials=(), npt=4):
     model.eval()
     vl, va, wn = [], [], []
     for idxs in batches:
         its = [items[i] for i in idxs]
-        x, slot, w, pc, fc = batchify(its, pad_id, dev, specials, w_unit_end)
+        x, slot, w, pc, fc = batchify(its, pad_id, dev, specials, w_unit_end, npt)
         with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
             logits = model(x[:, :-1], pc, fc, slot=slot[:, :-1])
         ce = F.cross_entropy(logits.float().reshape(-1, vocab),
@@ -286,6 +286,9 @@ def main():
     ap.add_argument("--w-unit-end", type=float, default=1.0,
                     help="OFFEN 1: a) 1.0 = ungewichtet; <1 gewichtet letztes "
                          "Token je Vertex-Quant herab (unit-weighted CE)")
+    ap.add_argument("--coords", choices=("polar", "cart"), default=None,
+                    help="Vertex-Koordinaten: polar (4/Vert) oder cart (3/Vert); "
+                         "None = aus Token-File")
     args = ap.parse_args()
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -298,6 +301,9 @@ def main():
     print(f"vocab={vocab} pad={pad_id} dev={dev} dtype={dtype}")
 
     ds = torch.load(args.tokens, weights_only=False)
+    coords = args.coords or ds.get("coords", "polar")
+    npt = 3 if coords == "cart" else 4  # cart: x,y,z je [0,Qr); polar: r,sin,cos,z
+    args.coords = coords
     src = torch.load(args.src, weights_only=False)
     if isinstance(src, dict):
         src = src["samples"]
@@ -307,7 +313,7 @@ def main():
     rb, zb = ds["r_bounds"], ds["z_bounds"]
     rb = tuple(float(v) for v in rb)
     zb = tuple(float(v) for v in zb)
-    print(f"bounds r={rb} z={zb}")
+    print(f"bounds r={rb} z={zb} coords={coords} npt={npt}")
 
     rng = np.random.default_rng(0)
 
@@ -335,6 +341,8 @@ def main():
         return items
 
     train_items, val_items = prep(ds["train"]), prep(ds["val"])
+    if not val_items:
+        raise ValueError("tokenized validation split is empty after source matching")
     lens = np.array([len(it["tokens"]) for it in train_items + val_items])
     print(f"{len(train_items)} train / {len(val_items)} val | seq-len min {lens.min()} "
           f"mean {int(lens.mean())} max {lens.max()}")
@@ -347,7 +355,8 @@ def main():
           f"max {bsizes.max()} pro Batch) | {len(val_batches)} val batches")
 
     model = GPTCond(vocab, args.d, args.layers, args.heads, max_len + 1,
-                    pad_id, args.dropout, args.n_points, args.n_latent).to(dev)
+                    pad_id, args.dropout, args.n_points, args.n_latent,
+                    npt=npt).to(dev)
     nparam = sum(p.numel() for p in model.parameters())
     print(f"Modell: d={args.d} layers={args.layers} heads={args.heads} "
           f"params={nparam / 1e6:.1f}M")
@@ -380,7 +389,7 @@ def main():
         for bi in pbar:
             items = [train_items[j] for j in train_batches[bi]]
             x, slot, w, pc, fc = batchify(items, pad_id, dev, SPECIALS,
-                                          args.w_unit_end)
+                                          args.w_unit_end, npt)
             with torch.autocast(dev, dtype=dtype, enabled=dev == "cuda"):
                 logits = model(x[:, :-1], pc, fc, slot=slot[:, :-1])
                 loss = weighted_loss(logits, x[:, 1:], w[:, 1:], pad_id,
@@ -411,17 +420,22 @@ def main():
                f"tok-acc {ep_corr / max(1, ep_tok):.3f}  peakVRAM {vram:.2f} GB")
         if (ep + 1) % args.val_every == 0 or ep == args.epochs - 1:
             vl, va = evaluate(model, val_batches, val_items, pad_id, vocab,
-                              dev, lossf, dtype, args.w_unit_end, SPECIALS)
+                              dev, lossf, dtype, args.w_unit_end, SPECIALS,
+                              npt=npt)
             msg += f"  VAL loss {vl:.3f} tok-acc {va:.3f}"
         print(msg + f"  ({time.time() - t0:.0f}s)")
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
                     "epoch": ep, "step": step,
-                    "r_bounds": rb, "z_bounds": zb}, args.ckpt)
+                    "r_bounds": rb, "z_bounds": zb,
+                    "coords": coords, "npt": npt}, args.ckpt)
         print(f"  checkpoint -> {args.ckpt}")
 
+    out_cfg = dict(vars(args))
+    out_cfg["npt"] = npt
     torch.save({"model": model.state_dict(),
-                "cfg": vars(args), "vocab": vocab, "pad_id": pad_id,
-                "r_bounds": rb, "z_bounds": zb}, args.out)
+                "cfg": out_cfg, "vocab": vocab, "pad_id": pad_id,
+                "r_bounds": rb, "z_bounds": zb,
+                "coords": coords, "npt": npt}, args.out)
     print(f"saved {args.out} ({time.time() - t0:.0f}s)")
 
 

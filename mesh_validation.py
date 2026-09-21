@@ -1,0 +1,119 @@
+"""Validation of generated hexahedral meshes before they leave the pipeline."""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+
+import numpy as np
+
+
+_HEX_FACES = (
+    (0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
+    (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7),
+)
+_TETS = (
+    (0, 1, 2, 6), (0, 2, 3, 6), (0, 3, 7, 6),
+    (0, 7, 4, 6), (0, 4, 5, 6), (0, 5, 1, 6),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MeshValidation:
+    """Machine-readable result for one generated hexahedral mesh."""
+
+    valid: bool
+    n_vertices: int
+    n_blocks: int
+    n_duplicate_vertices: int
+    n_degenerate_blocks: int
+    n_inverted_blocks: int
+    n_nonmanifold_faces: int
+    errors: tuple[str, ...]
+
+
+def _block_volumes(vertices: np.ndarray, blocks: np.ndarray) -> np.ndarray:
+    values = vertices[blocks]
+    volumes = []
+    for a, b, c, d in _TETS:
+        matrix = np.stack(
+            (values[:, b] - values[:, a],
+             values[:, c] - values[:, a],
+             values[:, d] - values[:, a]),
+            axis=-1,
+        )
+        volumes.append(np.linalg.det(matrix) / 6.0)
+    return np.stack(volumes, axis=1).sum(axis=1)
+
+
+def validate_generated_mesh(
+    vertices: np.ndarray,
+    blocks: np.ndarray,
+    *,
+    expected_blocks: int | None = None,
+    volume_epsilon: float = 1e-9,
+) -> MeshValidation:
+    """Check topology and geometry of a generated VTK hexahedral mesh."""
+    errors: list[str] = []
+    vertices = np.asarray(vertices)
+    blocks = np.asarray(blocks)
+    n_vertices = int(vertices.shape[0]) if vertices.ndim >= 1 else 0
+    n_blocks = int(blocks.shape[0]) if blocks.ndim >= 1 else 0
+
+    if vertices.ndim != 2 or vertices.shape[1:] != (3,):
+        errors.append(f"vertices shape {vertices.shape} != [N, 3]")
+    if blocks.ndim != 2 or blocks.shape[1:] != (8,):
+        errors.append(f"blocks shape {blocks.shape} != [F, 8]")
+    if expected_blocks is not None and n_blocks != expected_blocks:
+        errors.append(f"block count {n_blocks} != expected {expected_blocks}")
+    if not np.isfinite(vertices).all():
+        errors.append("vertices contain non-finite values")
+    if blocks.size and (blocks.min() < 0 or blocks.max() >= n_vertices):
+        errors.append("block index outside vertex range")
+
+    duplicate_vertices = 0
+    if vertices.ndim == 2 and vertices.shape[1:] == (3,) and vertices.size:
+        _, counts = np.unique(np.round(vertices, 12), axis=0, return_counts=True)
+        duplicate_vertices = int((counts > 1).sum())
+        if duplicate_vertices:
+            errors.append(f"{duplicate_vertices} duplicate vertex coordinate(s)")
+
+    degenerate_blocks = 0
+    inverted_blocks = 0
+    nonmanifold_faces = 0
+    if (
+        not errors
+        and blocks.size
+        and blocks.dtype.kind in "iu"
+    ):
+        unique_counts = np.apply_along_axis(lambda row: len(np.unique(row)), 1, blocks)
+        degenerate_blocks += int((unique_counts < 8).sum())
+        if degenerate_blocks:
+            errors.append(f"{degenerate_blocks} block(s) reuse a vertex index")
+        volumes = _block_volumes(vertices, blocks)
+        inverted_blocks = int((volumes < -volume_epsilon).sum())
+        collapsed = int((np.abs(volumes) <= volume_epsilon).sum())
+        degenerate_blocks += collapsed
+        if inverted_blocks:
+            errors.append(f"{inverted_blocks} inverted block(s)")
+        if collapsed:
+            errors.append(f"{collapsed} collapsed block(s)")
+
+        face_counts: Counter[tuple[int, ...]] = Counter()
+        for block in blocks:
+            for face in _HEX_FACES:
+                face_counts[tuple(sorted(int(block[index]) for index in face))] += 1
+        nonmanifold_faces = sum(count > 2 for count in face_counts.values())
+        if nonmanifold_faces:
+            errors.append(f"{nonmanifold_faces} non-manifold face(s)")
+
+    return MeshValidation(
+        valid=not errors,
+        n_vertices=n_vertices,
+        n_blocks=n_blocks,
+        n_duplicate_vertices=duplicate_vertices,
+        n_degenerate_blocks=degenerate_blocks,
+        n_inverted_blocks=inverted_blocks,
+        n_nonmanifold_faces=nonmanifold_faces,
+        errors=tuple(errors),
+    )

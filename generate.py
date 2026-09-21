@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 
 from hexa_row_tokenizer import HexaRowTokenizer
+from mesh_validation import validate_generated_mesh
 from train_hexarow_full import GPTCond, sample_points
 
 
@@ -279,7 +280,7 @@ def plot_result(path, vpt_cart, blk, gt, title, pc_cart=None):
 
 
 # ---------------------------------------------------------------------- main
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description="HexaRow-Generation aus Checkpoint",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -400,7 +401,7 @@ def main():
         print(f"DIAGNOSE: keine valide Row rekonstruierbar ({trim})")
         print(f"  rows gesamt={seq.count(core.sep_token)}, tokens={len(seq)}, "
               f"row-laengen={rows} -> fuer Detail-Analyse seq dumpen")
-        return
+        return 2
     vpt, blk = res
     if trim:
         print(f"WARN: Generation instabil, getrimmt: {trim}")
@@ -410,6 +411,13 @@ def main():
     vcart = np.stack([v_np[:, 0] * np.cos(v_np[:, 1]),
                       v_np[:, 0] * np.sin(v_np[:, 1]),
                       v_np[:, 2]], axis=-1)
+    validation = validate_generated_mesh(vcart, blk.numpy(), expected_blocks=blocks)
+    if not validation.valid:
+        print("INVALID GENERATED MESH: " + "; ".join(validation.errors))
+        print(f"  vertices={validation.n_vertices} blocks={validation.n_blocks} "
+              f"expected_blocks={blocks}")
+        return 2
+    print("mesh validation: valid")
     pc_cart = None
     if xyz is not None:
         r01, s01, c01, z01 = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3]
@@ -423,7 +431,8 @@ def main():
         title = "generated (blau) vs source (rot) vs punktwolke (grün)" if gt else "generated (blau)"
         plot_result(args.plot, vcart, blk.tolist(), gt, title, pc_cart)
         print(f"saved {args.plot}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

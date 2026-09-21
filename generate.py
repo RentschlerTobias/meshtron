@@ -5,8 +5,8 @@ Pfad 1 Inference-Glue: HexaRow-Modell-Ckpt -> Token-Generation -> Detokenize
 
 Input-Mesh = rohe xyz Vertices (z.B. tistos-Mesh); Polar-Umwandlung hier:
     r = sqrt(x^2 + y^2), theta = atan2(y, x), z unveraendert, center = 0.
-Conditioning: n gescannte vertices_polar (r/z normalisiert auf Checkpoint-
-bounds, theta als sin/cos) + face_count (Blockzahl).
+Conditioning: n Oberflaechenpunkte aus surface_points (Fallback: Mesh-Ecken;
+r/z normalisiert auf Checkpoint-bounds, theta als sin/cos) + face_count (Blockzahl).
 
   uv run python generate.py --idx 0 --ckpt data/hexarow_full_model_3090.pt
   uv run python generate.py --mesh <tistos-mesh.pt> --blocks 20 ...
@@ -62,24 +62,33 @@ def mesh_to_polar(xyz: np.ndarray) -> np.ndarray:
     return np.stack([np.hypot(x, y), np.arctan2(y, x), z], axis=-1)
 
 
-def load_sample(obj, idx: int):
-    """Sample aus .pt-Liste oder dict -> (xyz, blocks, name, faces_T|None)."""
+def load_sample(obj, idx: int, with_surface: bool = False):
+    """Sample aus .pt-Liste oder dict -> (xyz, blocks, name, faces_T|None[, surf]).
+    surf = surface_points [M,3] xyz (Komplettgeometrie) oder None; nur bei
+    with_surface=True als 5. Rueckgabewert (Abwaertskompatibilitaet)."""
     if isinstance(obj, (list, tuple)):
         s = obj[idx]
         xyz = np.asarray(s.get("vertices_cartesian", s.get("vertices")),
                          dtype=np.float64)
         faces = s.get("faces")
         blocks = int(faces.shape[1]) if faces is not None else -1
-        return xyz, blocks, s.get("name", f"sample{idx}"), \
-            (faces.T if faces is not None else None)
-    if isinstance(obj, dict):
+        out = (xyz, blocks, s.get("name", f"sample{idx}"),
+               faces.T if faces is not None else None)
+    elif isinstance(obj, dict):
         xyz = np.asarray(obj.get("vertices", obj.get("vertices_cartesian")),
                          dtype=np.float64)
         faces = obj.get("faces")
         blocks = int(faces.shape[1]) if faces is not None else -1
-        return xyz, blocks, obj.get("name", "mesh"), \
-            (faces.T if faces is not None else None)
-    raise ValueError(f"unbekanntes Mesh-Format in Sample {idx}")
+        out = (xyz, blocks, obj.get("name", "mesh"),
+               faces.T if faces is not None else None)
+    else:
+        raise ValueError(f"unbekanntes Mesh-Format in Sample {idx}")
+    if with_surface:
+        sp = (obj[idx] if isinstance(obj, (list, tuple)) else obj).get("surface_points")
+        surf = np.asarray(sp.detach().cpu().numpy() if hasattr(sp, "detach") else sp,
+                          dtype=np.float64) if sp is not None else None
+        return out + (surf,)
+    return out
 
 
 def slot_mask(tok, seq: list, cnt: int, vocab: int, coords: str) -> torch.Tensor:
@@ -342,12 +351,12 @@ def main() -> int:
     core = tok.core
 
     # Quelle / Conditioning
-    gt, xyz = None, None
+    gt, xyz, surf = None, None, None
     if args.mesh:
         obj = torch.load(args.mesh, weights_only=False)
         if isinstance(obj, dict) and 'samples' in obj:
             obj = obj['samples']
-        xyz, blocks, name, faces_t = load_sample(obj, max(0, args.idx))
+        xyz, blocks, name, faces_t, surf = load_sample(obj, max(0, args.idx), with_surface=True)
         if faces_t is not None:
             gt_faces_t = faces_t
             gt = (xyz, faces_t.tolist())
@@ -355,7 +364,7 @@ def main() -> int:
         src = torch.load(args.src, weights_only=False)
         if isinstance(src, dict) and 'samples' in src:
             src = src['samples']
-        xyz, blocks, name, faces_t = load_sample(src, args.idx)
+        xyz, blocks, name, faces_t, surf = load_sample(src, args.idx, with_surface=True)
         if faces_t is not None:
             gt = (xyz, faces_t.tolist())
     else:
@@ -370,7 +379,8 @@ def main() -> int:
 
     rng = np.random.default_rng(args.seed)
     if xyz is not None:
-        pts = sample_points(mesh_to_polar(xyz), args.n_points, rb, zb, rng)
+        cloud_xyz = surf if surf is not None else xyz
+        pts = sample_points(mesh_to_polar(cloud_xyz), args.n_points, rb, zb, rng)
     else:
         pts = np.zeros((args.n_points, 4), dtype=np.float64)
     pc = torch.as_tensor(pts[None], dtype=torch.float32, device=dev)

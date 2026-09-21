@@ -1,8 +1,8 @@
 """train_hexarow_full.py
 
 Pfad 1: HexaRowToken-Training auf vollem augmentierten 3D-Datensatz mit
-Conditioning auf Punktwolke (n verteilte vertices_polar-Punkte) und
-face_count (Blockzahl).
+Conditioning auf Punktwolke (n Oberflaechenpunkte aus surface_points,
+Fallback vertices_polar) und face_count (Blockzahl).
 
 Tokens werden aus scripts/build_hexarow_tokens.py geladen; die Punktwolken
 kommen direkt aus dem Source-.pt (verknuepft ueber 'name' der Samples).
@@ -22,6 +22,19 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from hexa_row_tokenizer import HexaRowTokenizer
+
+
+def surface_cloud(raw):
+    """Conditioning-Wolke [M,3] in polar (r,theta,z): komplette Geometrie aus
+    surface_points (xyz-Oberflaechensample, erfaent Blade-Windung ueber den
+    Radius); Fallback auf vertices_polar (nur Eckpunkte), wenn Feld fehlt."""
+    sp = raw.get("surface_points")
+    if sp is not None:
+        p = np.asarray(sp.detach().cpu().numpy() if hasattr(sp, "detach") else sp,
+                       dtype=np.float64)
+        return np.stack([np.hypot(p[:, 0], p[:, 1]), np.arctan2(p[:, 1], p[:, 0]),
+                         p[:, 2]], axis=-1)
+    return raw["vertices_polar"].detach().cpu().numpy().astype(np.float64)
 
 
 def sample_points(vp, n, rb, zb, rng):
@@ -325,8 +338,7 @@ def main():
             raw = name2sample.get(s["name"])
             if raw is None:
                 continue
-            pts = sample_points(raw["vertices_polar"].detach().cpu().numpy().astype(np.float64),
-                                args.n_points, rb, zb, rng)
+            pts = sample_points(surface_cloud(raw), args.n_points, rb, zb, rng)
             base = {"points": pts, "blocks": s["blocks"], "name": s["name"]}
             toks = s["tokens"].tolist()
             if args.window > 0 and len(toks) > args.window:

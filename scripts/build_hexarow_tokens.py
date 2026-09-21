@@ -19,6 +19,7 @@ from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402 (repo-root on sys.
 
 _DATA = None
 _TOK = None
+_COORDS = 'polar'  # fork-global: _proc_one liest hier; main() setzt vor Pool-Start
 
 
 def bounds_from(data, pad=0.02):
@@ -38,7 +39,7 @@ def bounds_from(data, pad=0.02):
 def _proc_one(i):
     s = _DATA[i]
     try:
-        ids = _TOK.tokenize(s)
+        ids = _TOK.tokenize(s, coords=_COORDS)
     except Exception as e:
         return i, None, f"SKIP sample {i} ({s.get('name', '?')}): {type(e).__name__}: {e}"
     lv = s.get("subdiv_n", None)
@@ -59,12 +60,37 @@ def main():
     ap.add_argument("--ckpt-out", default=None,
                     help="incremental checkpoint .pt (name -> stream dict); "
                          "finished samples are skipped on resume")
+    ap.add_argument("--only", type=int, default=-1,
+                    help="nur diesen Index aus der geladenen Sample-Liste behalten "
+                         "(-1=aus); bounds & train/val-split leiten sich daraus ab "
+                         "(single-mesh overfit)")
+    ap.add_argument("--coords", choices=("polar", "cart"), default="polar",
+                    help="Vertex-Token-Koordinaten: polar (4/Vert) oder cart (3/Vert); "
+                         "cart braucht vertices_cartesian im Sample")
     args = ap.parse_args()
 
-    global _DATA, _TOK
+    global _DATA, _TOK, _COORDS
+    _COORDS = args.coords
     _DATA = torch.load(args.src, weights_only=False)
     if isinstance(_DATA, dict) and "samples" in _DATA:
         _DATA = _DATA["samples"]
+    if args.only >= 0:
+        if args.only >= len(_DATA):
+            raise IndexError(f"--only {args.only} ausserhalb [0, {len(_DATA)})")
+        kept = _DATA[args.only]
+        if not kept.get("name"):
+            # Original-Index als Name sichern: Train-Src-Matching laeuft ueber
+            # fallback-Namen f"sample{i}" mit voller Listenindexierung.
+            kept["name"] = f"sample{args.only}"
+        print(f"--only {args.only}: 1/{len(_DATA)} samples behalten "
+              f"({kept.get('name', '?')})")
+        _DATA = [kept]
+    if args.coords == 'cart':
+        missing = [s.get('name', '?') for s in _DATA
+                   if s.get('vertices_cartesian') is None]
+        if missing:
+            raise ValueError(f"--coords cart: vertices_cartesian fehlt in samples: "
+                             f"{missing}")
     if args.max_blocks:
         before = len(_DATA)
         _DATA = [s for s in _DATA if int(s["faces"].shape[1]) <= args.max_blocks]
@@ -116,8 +142,15 @@ def main():
     val_machines = set(machines[-max(1, int(len(machines) * args.val_frac)):])
     train = [s for s in streams if s["name"].rsplit("_n", 1)[0] not in val_machines]
     val = [s for s in streams if s["name"].rsplit("_n", 1)[0] in val_machines]
+    if streams and (not train or not val):
+        only = streams[0]
+        print(f"single-mesh overfit: train==val duplication ({only['name']})")
+        train = [only]
+        val = [only]
+    npt = 3 if args.coords == 'cart' else 4
     torch.save({"train": train, "val": val, "vocab": vocab,
-                "r_bounds": rb, "z_bounds": zb}, args.out)
+                "r_bounds": rb, "z_bounds": zb,
+                "coords": args.coords, "npt": npt}, args.out)
     print(f"wrote {args.out}: {len(train)} train / {len(val)} val ({nskip} skips)")
 
 

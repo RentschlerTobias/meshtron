@@ -37,6 +37,11 @@ Flaeschendreieck naeher liegt. Genau das schuetzt LE/TE vor dem Glattbuegeln
 durch reine Flaechenprojektion. `feature_id` = vertex- | edge- | Dreiecksindex.
 Auf den GT-Ecken ist das Snappen idempotent (dist 0, tier `vertex`).
 
+Das Snappen ist auf Feature-Punkten **injektiv**: jede GT-Ecke wird von
+hoechstens einer eindeutigen generierten Ecke beansprucht (naechster gewinnt,
+Verlierer steigen zu edge/surface ab). Details in
+[Injektives Snapping](#injektives-snapping-kollisionsaufloesung).
+
 ## v5-Label-Befund (Paritaetsfalle, NICHT gefixt)
 
 `conditioning.py:18-20` kommentiert `BLADE_LABEL = 5` als "5=blade". Die reale
@@ -126,8 +131,8 @@ Feature-Modell: 40 GT-Ecken, 168 Feature-Kanten, 19516 Flaeschentris.
 | Rollout | Bloecke | tier vertex/edge/surface | mean snap dist | min det J | strukturell |
 |---|---|---|---|---|---|
 | 0 | 12 | 25 / 50 / 21 | 0.019139 | -0.012819 | ja |
-| 1,3,4 | 12 | 45 / 29 / 22 | 0.029781 | -0.009061 | nein (1 Dup-Ecke) |
-| 2,5,6,7 | 12 | 55 / 26 / 15 | 0.026324 | -0.000480 | nein (1 Dup-Ecke) |
+| 1,3,4 | 12 | 40 / 34 / 22 | 0.028240 | -0.018240 | ja |
+| 2,5,6,7 | 12 | 50 / 31 / 15 | 0.023950 | -0.011300 | ja |
 
 Gewaehlt: Rollout 0 (mean_d 0.019139, tiers 25/50/21, 12 Bloecke).
 TFI: 12656 Zellen, 3918 Randflaechen, watertight True; min scaled Jacobian
@@ -139,22 +144,47 @@ Feature-Modell: 62 GT-Ecken, 274 Feature-Kanten, 19106 Flaeschentris.
 
 | Rollout | Bloecke | tier vertex/edge/surface | mean snap dist | min det J | strukturell |
 |---|---|---|---|---|---|
-| 0,1,2,3,6 | 22 | 63 / 70 / 43 | 0.025760 | -0.024220 | nein (1 Dup-Ecke) |
-| 4 | 22 | 85 / 65 / 26 | 0.027750 | -0.030800 | nein (1 Dup-Ecke) |
+| 0,1,2,3,6 | 22 | 55 / 78 / 43 | 0.024300 | -0.009580 | ja |
+| 4 | 22 | 78 / 72 / 26 | 0.025900 | -0.030800 | ja |
 | 5 | 22 | 55 / 78 / 43 | 0.020715 | -0.020455 | ja |
-| 7 | 22 | 40 / 86 / 50 | 0.023030 | -0.001450 | nein (1 Dup-Ecke) |
+| 7 | 22 | 32 / 90 / 54 | 0.020960 | -0.001450 | ja |
 
 Gewaehlt: Rollout 5 (mean_d 0.020715, tiers 55/78/43, 22 Bloecke; GT 21 —
 Blockzahl-Mismatch ist erlaubt, das ist der multimodale Punkt).
 TFI: 12885 Zellen, 3938 Randflaechen, watertight True; min scaled Jacobian
 -0.3179, 50 Zellen <= 0.
 
-### Beobachtung: Snapping kann Ecken verschmelzen
+### Injektives Snapping (Kollisionsaufloesung)
 
-7/8 bzw. 7/8 Rollouts werden nach dem Snappen strukturell ungueltig durch
-"1 duplicate vertex coordinate" — zwei generierte Ecken landen auf demselben
-Feature-Punkt. Das ist ein echtes Ergebnis (nicht CFD-fertig) und wird
-verworfen; nur der strukturell gueltige Kandidat wird weiterverarbeitet.
+Ohne Regel schnappten zwei verschiedene generierte Ecken auf dieselbe GT-Ecke:
+in idx 687 immer v28 (roh 0.5811,0.1352,1.4866) und v38 (roh 0.5884,0.0987,1.4357),
+Separation 0.063, beide in < 0.06 von Feature-Punkt 39 (0.5794,0.1456,1.4293)
+(dists 0.0583 / 0.0481). Beide bei (0.5794,0.1456,1.4293) -> Kante der Laenge 0
+-> `1 duplicate vertex coordinate(s)`.
+
+Regel (block_mapping-only): jede GT-Ecke darf von hoechstens EINER eindeutigen
+generierten Ecke beansprucht werden. Identische Rohkoordinaten (geteilter Vertex
+ueber mehrere Bloecke) zaehlen als EINE Stimme — `np.unique(axis=0)` gruppiert,
+die Aufloesung wird per Gruppen-Inverse auf alle Zeilen broadcastet, damit der
+Scatter `snapped_v[blocks] = C_snap` konsistent bleibt. Bei Kollision gewinnt
+der kleinste Abstand, Gleichstand deterministisch ueber den kleinsten Eckindex;
+Verlierer steigen eine Stufe ab (naechste Kante innerhalb tol_e, sonst Flaeche).
+Kollisionen auf gleicher Kanten-Parameter werden bewusst nicht geloest — das
+faengt der Struktur-Validator ab (Design-Vertrag, eins pro Stufe).
+
+Vorher/Nachher (strukturell gueltige Rollouts von k=8):
+
+| Item | vorher | nachher |
+|---|---|---|
+| idx 687 | 1/8 (7x Dup-Ecke) | **8/8** |
+| idx 684 | 1/8 (7x Dup-Ecke) | **8/8** |
+
+Der Preis ist der Design-Tradeoff: abgestufte Ecken landen auf Kante/Flaeche,
+der mean snap dist dieser Rollouts wird von der Abstufung dominiert (z.B.
+idx 687: 0.0298 -> 0.0282 bei den Verlierer-Rollouts; idx 684 Dominanzmode
+0.0258 -> 0.0243). Der gewaehlte Kandidat bleibt unveraendert (idx 687 R0,
+idx 684 R5), weil dort die Kollisionspaare nicht auf dem gueltigen Pfad lagen.
+`positivity_fallback` bleibt aktiv (gefaltete GT-Grobbloecke, s.o.).
 
 ## Tests
 
@@ -165,6 +195,10 @@ verworfen; nur der strukturell gueltige Kandidat wird weiterverarbeitet.
 - Dieselbe Ecke mit tol_v=0.01 -> tier `edge`; +0.05 -> tier `surface`.
 - Blade-Kanteninneres (weit weg von GT-Ecken): +0.03 -> `edge`, +0.05 -> `surface`.
 - Score-Ordnung: Versatz strikt schlechter.
+- Kollisions-Regression (v28/v38 an Feature-Punkt 39): naehere Ecke tier
+  `vertex`, andere abgestuft, Ziele verschieden.
+- Geteilter Rohkoordinaten-Punkt in zwei Bloecken: identischer Record
+  (tier/feature_id/dist/target).
 
 Bestehende Gates gruen: `test_slot_parity`, `smoke_mesh_validation`,
 `test_rewards_hexarow`, `test_conditioning_parity`.

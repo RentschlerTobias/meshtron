@@ -147,11 +147,46 @@ def test_score_ordering_sanity() -> None:
     assert mean1 > mean0
 
 
+def test_vertex_collision_demotes_loser() -> None:
+    # Given zwei verschiedene Rohpunkte (idx-687 v28/v38) an derselben GT-Ecke
+    fm = _fm()
+    v28 = np.array([0.5811, 0.1352, 1.4866])
+    v38 = np.array([0.5884, 0.0987, 1.4357])
+    C = np.stack([v28, v38])[None]
+    # When gesnappt wird
+    Cs, rec = fm.snap_corners(C)
+    # Then gewinnt der naehere (v38, Index 1) den Feature-Punkt, der andere
+    # steigt auf edge/surface ab und die Ziele fallen nicht zusammen
+    assert rec[1]["tier"] == "vertex" and rec[1]["feature_id"] == 39
+    assert rec[0]["tier"] in ("edge", "surface")
+    assert not np.allclose(Cs[0, 0], Cs[0, 1])
+
+
+def test_shared_raw_coordinate_gets_identical_record() -> None:
+    # Given dieselbe Rohkoordinate als Ecke in zwei verschiedenen Bloecken
+    fm = _fm()
+    shared = fm.vertices[0].copy()
+    far = np.array([10.0, 10.0, 10.0])
+    C = np.full((2, 8, 3), far)
+    C[0, 0] = shared
+    C[1, 5] = shared
+    # When gesnappt wird
+    _, rec = fm.snap_corners(C)
+    a, b = rec[0], rec[13]
+    # Then sind tier/feature_id/dist/target identisch (Scatter-Konsistenz)
+    assert a["tier"] == b["tier"] == "vertex"
+    assert a["feature_id"] == b["feature_id"]
+    assert a["dist"] == b["dist"]
+    assert a["target"] == b["target"]
+
+
 if __name__ == "__main__":
     for fn in (test_snap_idempotent_on_gt_corners,
                test_gt_vertex_displaced_snaps_back_to_feature_point,
                test_blade_curve_outranks_surface_when_vertex_tol_is_tight,
                test_blade_curve_interior_prefers_edge_over_surface,
-               test_score_ordering_sanity):
+               test_score_ordering_sanity,
+               test_vertex_collision_demotes_loser,
+               test_shared_raw_coordinate_gets_identical_record):
         fn()
         print(f"PASS {fn.__name__}")

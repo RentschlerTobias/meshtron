@@ -95,67 +95,84 @@ class FeatureModel:
         centroids = self.surface_points[self.surface_tris].mean(axis=1)
         self.tri_tree = cKDTree(centroids)
 
+    def _edge_nearest(self, q: np.ndarray, cfg: SnapConfig):
+        """(n,3) -> (dist, edge_id, punkt) auf der naechsten edge_polyline."""
+        _, cand = self.seg_tree.query(q, k=min(cfg.k_seg, len(self.seg_mid)))
+        cand = np.atleast_2d(cand)
+        p = _project_to_segments(q[:, None, :], self.seg_a[cand],
+                                 self.seg_b[cand])
+        d = np.linalg.norm(q[:, None, :] - p, axis=-1)
+        best = np.argmin(d, axis=1)
+        rows = np.arange(len(q))
+        return d[rows, best], self.seg_edge[cand[rows, best]], p[rows, best]
+
+    def _surface_nearest(self, q: np.ndarray, cfg: SnapConfig):
+        """(n,3) -> (dist, Dreiecksindex, punkt) auf der naechsten surface_tris."""
+        _, cand = self.tri_tree.query(q, k=min(cfg.k_tri, len(self.surface_tris)))
+        cand = np.atleast_2d(cand)
+        T = self.surface_tris[cand]
+        d2, p = _closest_point_on_tris(q, self.surface_points[T[..., 0]],
+                                       self.surface_points[T[..., 1]],
+                                       self.surface_points[T[..., 2]])
+        best = np.argmin(d2, axis=1)
+        rows = np.arange(len(q))
+        return np.sqrt(d2[rows, best]), cand[rows, best], p[rows, best]
+
     def snap_corners(self, corners: np.ndarray, cfg: SnapConfig | None = None
                      ) -> tuple[np.ndarray, list[dict]]:
-        """(nb,8,3) -> (gesnappt, pro-Ecke {tier, dist, feature_id}).
+        """(nb,8,3) -> (gesnappt, pro-Ecke {tier, feature_id, dist, target}).
 
+        Injizierend auf Feature-Punkten: jede GT-Ecke darf von hoechstens EINER
+        eindeutigen generierten Ecke beansprucht werden, sonst kollabiert eine
+        Kante auf Laenge 0. Identische Rohkoordinaten (geteilter Vertex ueber
+        mehrere Bloecke) zaehlen als EINE Stimme und bekommen identische
+        Records, damit der Scatter snapped_v[blocks]=C_snap konsistent bleibt.
+        Verlierer steigen eine Stufe ab (edge innerhalb tol_e, sonst surface).
         feature_id: vertex-Index | edge-Index | Dreiecksindex (surface).
         """
         cfg = cfg or SnapConfig()
         C = np.asarray(corners, dtype=np.float64)
         flat = C.reshape(-1, 3)
-        n = len(flat)
-        snapped = flat.copy()
-        dists = np.zeros(n)
-        fids = np.full(n, -1, dtype=np.int64)
-        tier = np.full(n, "surface", dtype=object)
+        uniq, inv = np.unique(flat, axis=0, return_inverse=True)
+        inv = inv.reshape(-1)
+        g = len(uniq)
 
-        # 1) Feature-Punkte
-        dv, iv = self.vertex_tree.query(flat, k=1)
-        sel = dv <= cfg.tol_v
-        snapped[sel] = self.vertices[iv[sel]]
-        dists[sel] = dv[sel]
-        fids[sel] = iv[sel]
-        tier[sel] = "vertex"
+        dv, iv = self.vertex_tree.query(uniq, k=1)
+        de, ie, pe = self._edge_nearest(uniq, cfg)
+        dist, fid, target = self._surface_nearest(uniq, cfg)
+        tier = np.full(g, 2, dtype=np.int8)
 
-        # 2) Feature-Kurven (nur was nicht schon ein Feature-Punkt ist)
-        rem = np.flatnonzero(~sel)
-        if len(rem):
-            q = flat[rem]
-            _, cand = self.seg_tree.query(q, k=min(cfg.k_seg, len(self.seg_mid)))
-            cand = np.atleast_2d(cand)
-            p = _project_to_segments(q[:, None, :], self.seg_a[cand],
-                                     self.seg_b[cand])
-            d = np.linalg.norm(q[:, None, :] - p, axis=-1)
-            best = np.argmin(d, axis=1)
-            rows = np.arange(len(q))
-            dbest = d[rows, best]
-            hit = dbest <= cfg.tol_e
-            tgt = rem[hit]
-            snapped[tgt] = p[rows[hit], best[hit]]
-            dists[tgt] = dbest[hit]
-            fids[tgt] = self.seg_edge[cand[rows[hit], best[hit]]]
-            tier[tgt] = "edge"
+        # Feature-Punkt: naechster Anspruch gewinnt, Gleichstand -> kleinster
+        # Eckindex der Gruppe (deterministisch). Alle anderen fallen weiter.
+        first = np.full(g, np.iinfo(np.int64).max, dtype=np.int64)
+        np.minimum.at(first, inv, np.arange(len(flat), dtype=np.int64))
+        winners = np.zeros(g, bool)
+        claimed: set[int] = set()
+        for gi in np.lexsort((first, dv)):
+            if dv[gi] > cfg.tol_v:
+                break
+            f = int(iv[gi])
+            if f not in claimed:
+                claimed.add(f)
+                winners[gi] = True
 
-        # 3) Flaechen-Fallback
-        rem2 = np.flatnonzero(tier == "surface")
-        if len(rem2):
-            q = flat[rem2]
-            _, cand = self.tri_tree.query(q, k=min(cfg.k_tri,
-                                                   len(self.surface_tris)))
-            cand = np.atleast_2d(cand)
-            T = self.surface_tris[cand]
-            d2, p = _closest_point_on_tris(
-                q, self.surface_points[T[..., 0]],
-                self.surface_points[T[..., 1]], self.surface_points[T[..., 2]])
-            best = np.argmin(d2, axis=1)
-            rows = np.arange(len(q))
-            snapped[rem2] = p[rows, best]
-            dists[rem2] = np.sqrt(d2[rows, best])
-            fids[rem2] = cand[rows, best]
+        target, fid, dist = target.copy(), fid.copy(), dist.copy()
+        if winners.any():
+            tier[winners] = 0
+            target[winners] = self.vertices[iv[winners]]
+            fid[winners] = iv[winners]
+            dist[winners] = dv[winners]
+        edge_ok = (~winners) & (de <= cfg.tol_e)
+        tier[edge_ok] = 1
+        target[edge_ok] = pe[edge_ok]
+        fid[edge_ok] = ie[edge_ok]
+        dist[edge_ok] = de[edge_ok]
 
-        records = [{"tier": str(tier[i]), "dist": float(dists[i]),
-                    "feature_id": int(fids[i])} for i in range(n)]
+        names = np.array(["vertex", "edge", "surface"])
+        snapped = target[inv]
+        records = [{"tier": str(names[tier[inv[i]]]), "feature_id": int(fid[inv[i]]),
+                    "dist": float(dist[inv[i]]),
+                    "target": target[inv[i]].tolist()} for i in range(len(flat))]
         return snapped.reshape(C.shape), records
 
 
@@ -165,6 +182,77 @@ def tier_counts(records: list[dict]) -> dict[str, int]:
     for r in records:
         out[r["tier"]] = out.get(r["tier"], 0) + 1
     return out
+
+
+@dataclass(frozen=True, slots=True)
+class SnapConfigV2(SnapConfig):
+    """Toleranzen des Kurven-Snappings: Kurven-ENDPUNKT | Kurve | Flaeche."""
+
+
+def snap_corners_v2(fm, corners: np.ndarray, cfg: SnapConfigV2 | None = None
+                    ) -> tuple[np.ndarray, list[dict]]:
+    """(nb,8,3) -> (gesnappt, Records) gegen das Geometrie-Kurvenmodell.
+
+    Vertex-Tier zielt auf Kurven-ENDPUNKTE (`FeatureModelV2.curves.ep_pt`), die
+    ueber die deduplizierte Punktmenge injizierend beansprucht werden — sonst
+    kollabiert eine Kante auf Laenge 0. Die `claimed`-Semantik ist identisch zu
+    `FeatureModel.snap_corners`; zusaetzlich tragen die Records `curve_id`/`t`
+    (Bogenlaenge am Ziel), was die Kurven-Rekonstruktion speist.
+    feature_id: deduplizierter Endpunkt | Kurvenindex | Dreiecksindex.
+    """
+    cfg = cfg or SnapConfigV2()
+    C = np.asarray(corners, dtype=np.float64)
+    flat = C.reshape(-1, 3)
+    uniq, inv = np.unique(flat, axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    g = len(uniq)
+    cs = fm.curves
+    eu, eu_inv = (np.unique(cs.ep_pt, axis=0, return_inverse=True)
+                  if len(cs.ep_pt) else (np.zeros((0, 3)), np.zeros(0, np.int64)))
+    eu_inv = np.asarray(eu_inv).reshape(-1)
+    dv, iv = cs.nearest_endpoint(uniq)
+    eid = eu_inv[iv] if len(eu_inv) else np.zeros(g, np.int64)
+    de, ce, te, pe = cs.nearest(uniq)
+    ds, isurf, ps = fm.surface_nearest(uniq, cfg.k_tri)
+    tier = np.full(g, 2, dtype=np.int8)
+
+    first = np.full(g, np.iinfo(np.int64).max, dtype=np.int64)
+    np.minimum.at(first, inv, np.arange(len(flat), dtype=np.int64))
+    winners = np.zeros(g, bool)
+    claimed: set[int] = set()
+    for gi in np.lexsort((first, dv)):
+        if dv[gi] > cfg.tol_v:
+            break
+        f = int(eid[gi])
+        if f not in claimed:
+            claimed.add(f)
+            winners[gi] = True
+
+    target, fid, dist = ps.copy(), isurf.copy(), ds.copy()
+    cid = np.full(g, -1, np.int64)
+    tt = np.zeros(g)
+    if winners.any():
+        tier[winners] = 0
+        target[winners] = eu[eid[winners]]
+        fid[winners] = eid[winners]
+        dist[winners] = dv[winners]
+    edge_ok = (~winners) & (de <= cfg.tol_e)
+    tier[edge_ok] = 1
+    target[edge_ok] = pe[edge_ok]
+    fid[edge_ok] = ce[edge_ok]
+    dist[edge_ok] = de[edge_ok]
+    cid[edge_ok] = ce[edge_ok]
+    tt[edge_ok] = te[edge_ok]
+    cid[winners] = cs.ep_curve[iv[winners]]
+    tt[winners] = cs.ep_t[iv[winners]]
+
+    names = np.array(["vertex", "edge", "surface"])
+    snapped = target[inv]
+    records = [{"tier": str(names[tier[inv[i]]]), "feature_id": int(fid[inv[i]]),
+                "dist": float(dist[inv[i]]), "curve_id": int(cid[inv[i]]),
+                "t": float(tt[inv[i]]), "target": target[inv[i]].tolist()}
+               for i in range(len(flat))]
+    return snapped.reshape(C.shape), records
 
 
 def score_candidate(corners: np.ndarray, records: list[dict]

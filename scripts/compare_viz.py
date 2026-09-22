@@ -62,11 +62,16 @@ def _to_cart(v: np.ndarray, coords: str) -> np.ndarray:
                            v[:, 0] * np.sin(v[:, 1]), v[:, 2]], axis=-1))
 
 
-def _write_compare_vtk(path, xyz, gt_blocks, gen_cart, gen_blocks, pc) -> None:
-    """3-teiliges VTK schreiben (part 1/2/3). Byte-identisch zum Legacy-Pfad."""
-    parts = [(np.asarray(xyz, dtype=np.float64), gt_blocks, 1, 12),
-             (np.asarray(gen_cart, dtype=np.float64), gen_blocks, 2, 12),
-             (np.asarray(pc, dtype=np.float64), [[k] for k in range(len(pc))], 3, 1)]
+def _write_parts_vtk(path, parts, title) -> None:
+    """Legacy-ASCII-VTK aus beliebig vielen Teilen (punkte, bloecke, part_id, cell_type).
+
+    Ein Part = ein Satz Punkte + Hex-Zellen; die Punkteindizes der Zellen werden
+    um den Punkt-Offset des jeweiligen Parts verschoben. CELL_DATA 'part' traegt
+    die part_id, CELL_TYPES den VTK-Zelltyp (12=Hex, 1=Punkt). Mehrere Part-
+    Bloecke koennen disjunkte Punktmengen sein (ParaView: Threshold auf part).
+    """
+    parts = [(np.asarray(p[0], dtype=np.float64), p[1], int(p[2]), int(p[3]))
+             for p in parts]
     m = sum(len(p[0]) for p in parts)
     V = np.concatenate([p[0] for p in parts], axis=0)
 
@@ -84,8 +89,9 @@ def _write_compare_vtk(path, xyz, gt_blocks, gen_cart, gen_blocks, pc) -> None:
     assert len(cells) == sum(len(p[1]) for p in parts), "zell-payment fehlerhaft"
 
     with open(path, "w") as fh:
-        fh.write("# vtk DataFile Version 2.0\nmeshtron compare (true|generated|pointcloud)\nASCII\n")
-        fh.write("DATASET UNSTRUCTURED_GRID\n")
+        fh.write("# vtk DataFile Version 2.0\n")
+        fh.write(f"{title}\n")
+        fh.write("ASCII\nDATASET UNSTRUCTURED_GRID\n")
         fh.write(f"POINTS {m} double\n")
         for p in V:
             fh.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
@@ -96,6 +102,15 @@ def _write_compare_vtk(path, xyz, gt_blocks, gen_cart, gen_blocks, pc) -> None:
         fh.write(f"CELL_DATA {len(scalars)}\n")
         fh.write("SCALARS part int 1\nLOOKUP_TABLE default\n")
         fh.write("\n".join(scalars) + "\n")
+
+
+def _write_compare_vtk(path, xyz, gt_blocks, gen_cart, gen_blocks, pc) -> None:
+    """3-teiliges VTK schreiben (part 1=true, 2=generated, 3=punktwolke).
+    Byte-identisch zum Legacy-Pfad (delegiert an _write_parts_vtk)."""
+    parts = [(xyz, gt_blocks, 1, 12),
+             (gen_cart, gen_blocks, 2, 12),
+             (pc, [[k] for k in range(len(pc))], 3, 1)]
+    _write_parts_vtk(path, parts, "meshtron compare (true|generated|pointcloud)")
 
 
 def _run_legacy(args) -> int:

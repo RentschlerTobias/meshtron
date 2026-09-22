@@ -19,6 +19,11 @@ import numpy as np
 # 6=periodic_A, 7=periodic_B. Label 5 in realer sample.npz verifiziert.
 BLADE_LABEL = 5
 
+# O-grid cut band surface around the blade row (npz surface label verified:
+# r spans hub..shroud, z limited to the band, theta ±45 deg). Only used at
+# generation time via band_weight; training data is untouched.
+BAND_LABEL = 7
+
 
 def polar_from_xyz(p: np.ndarray) -> np.ndarray:
     """[N,3] xyz -> [N,3] (r, theta, z), float64."""
@@ -53,6 +58,18 @@ def point_is_blade(n_points: int, tris: np.ndarray, tri_label: np.ndarray,
     return mask
 
 
+def point_is_band(n_points: int, tris: np.ndarray, tri_label: np.ndarray,
+                  band_label: int = BAND_LABEL) -> np.ndarray:
+    """Per-point flag for the O-grid cut band (label band_label). Same logic
+    as point_is_blade; tris index into surface_points."""
+    mask = np.zeros(int(n_points), dtype=bool)
+    tris = np.asarray(tris, dtype=np.int64)
+    sel = np.asarray(tri_label) == band_label
+    if sel.any():
+        mask[tris[sel].ravel()] = True
+    return mask
+
+
 def _normalize(p: np.ndarray, rb: tuple, zb: tuple) -> np.ndarray:
     """(r,theta,z) -> [n,4] (r', sin, cos, z'); Spaltenreihenfolge wie
     train_hexarow_full.sample_points."""
@@ -62,18 +79,27 @@ def _normalize(p: np.ndarray, rb: tuple, zb: tuple) -> np.ndarray:
 
 
 def build_cloud(sample: dict, n_points: int, rb: tuple, zb: tuple, rng,
-                blade_weight: float | None = None):
+                blade_weight: float | None = None,
+                band_weight: float | None = None):
     """Punktwolke [n,4] aus dem Sample. weights=None -> bit-identisch zu
     sample_points(surface_cloud(sample), ...); sonst Blade-Punkte mit
     blade_weight (z.B. 3.0) oversampled, zweiter Output = is_blade-Maske der
-    gezogenen Punkte. Ohne is_blade im Sample -> uniform (kein Oversample)."""
+    gezogenen Punkte. Ohne is_blade im Sample -> uniform (kein Oversample).
+    band_weight (opt-in, Generation only) oversamples the O-grid band points
+    compositionally: band points keep their blade_weight and gain an extra
+    band_weight factor; requires is_band in sample."""
     vp = surface_cloud(sample)
     is_blade = sample.get("is_blade")
-    if blade_weight is None or is_blade is None:
+    is_band = sample.get("is_band")
+    if blade_weight is None or is_blade is None or (
+            band_weight is not None and is_band is None):
         idx = rng.choice(len(vp), size=n_points, replace=len(vp) < n_points)
         return _normalize(vp[idx], rb, zb), None
     is_blade = np.asarray(is_blade, dtype=bool)
     w = np.where(is_blade, float(blade_weight), 1.0)
+    if band_weight is not None:
+        is_band = np.asarray(is_band, dtype=bool)
+        w = np.where(is_band, w * float(band_weight), w)
     idx = rng.choice(len(vp), size=n_points, replace=True, p=w / w.sum())
     return _normalize(vp[idx], rb, zb), is_blade[idx]
 

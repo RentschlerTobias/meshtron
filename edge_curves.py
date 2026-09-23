@@ -215,6 +215,17 @@ def _canon_cycle(ids: list[int]) -> tuple[list[int], list[int]]:
     return cyc, cyc
 
 
+def _match_len(Q: np.ndarray, n: int) -> np.ndarray:
+    """Resample only when the sample count actually differs.
+
+    Routed edges are not arc-length uniform after projection and smoothing, so
+    an unconditional _resample redistributes their points and drops them into
+    the middle of long segments -- off the surface by that segment's sagitta
+    (measured up to 0.394 on machine_0106_n2000). Resampling a curve to the
+    length it already has can only lose accuracy."""
+    return Q if len(Q) == n else _resample(Q, n)
+
+
 def _canonical_face(st: CurvedStructure, cyc: list[int]) -> np.ndarray:
     """Coons-Gitter aus 4 kanonisch geordneten Kurvenkanten.
 
@@ -222,8 +233,8 @@ def _canonical_face(st: CurvedStructure, cyc: list[int]) -> np.ndarray:
     (nicht-konforme Nachbarbloecke) werden auf die Zielkantenlaenge resampled."""
     e0 = st.get_edge(cyc[0], cyc[1])
     e2 = st.get_edge(cyc[0], cyc[3])
-    e1 = _resample(st.get_edge(cyc[3], cyc[2]), len(e0))
-    e3 = _resample(st.get_edge(cyc[1], cyc[2]), len(e2))
+    e1 = _match_len(st.get_edge(cyc[3], cyc[2]), len(e0))
+    e3 = _match_len(st.get_edge(cyc[1], cyc[2]), len(e2))
     return _coons(e0, e1, e2, e3)
 
 

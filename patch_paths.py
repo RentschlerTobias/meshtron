@@ -144,6 +144,21 @@ class Patch:
         return P
 
 
+def max_kink_deg(Q: np.ndarray) -> float:
+    """Largest turning angle between consecutive segments, in degrees.
+
+    A crease in a block edge propagates into a bad cell layer through the
+    transfinite interpolation, so it is worth reporting per edge."""
+    Q = np.asarray(Q, float)
+    if len(Q) < 3:
+        return 0.0
+    d = np.diff(Q, axis=0)
+    nn = np.linalg.norm(d, axis=1, keepdims=True)
+    u = d / np.maximum(nn, 1e-15)
+    c = np.clip(np.einsum('ij,ij->i', u[:-1], u[1:]), -1.0, 1.0)
+    return float(np.degrees(np.arccos(c)).max())
+
+
 def resample(Q: np.ndarray, n: int) -> np.ndarray:
     """Polyline -> n arc-length equidistant points."""
     Q = np.asarray(Q, float)
@@ -163,7 +178,8 @@ class PatchPaths:
     def __init__(self, fm, records: list | None = None, smooth_iters: int = 300,
                  stats: dict | None = None, is_boundary=None,
                  clearance: float = 0.0, obstacle_labels=(7,),
-                 clearance_alpha: float = 8.0):
+                 clearance_alpha: float = 8.0,
+                 clearance_chord_frac: float = 0.25):
         self.fm = fm
         self.seam = fm.seam_curves
         self.stats = stats if stats is not None else {}
@@ -181,6 +197,12 @@ class PatchPaths:
             self.patches[int(lab)] = Patch(fm.surface_points,
                                            fm.surface_tris[sel], int(lab))
         self.clearance = float(clearance)
+        # A short edge cannot bow a full clearance away from the blade without
+        # kinking: pushing an edge of chord 0.081 out by 0.06 bends it by 68
+        # degrees, and the transfinite interpolation turns that crease into a
+        # bad cell layer. The effective clearance is therefore capped at a
+        # fraction of the edge's own chord.
+        self.clearance_chord_frac = float(clearance_chord_frac)
         self.obstacle = None
         if self.clearance > 0:
             sel = np.isin(fm.surface_tri_label, list(obstacle_labels))
@@ -215,26 +237,28 @@ class PatchPaths:
         d = np.sqrt(d2[rows, best])
         return (d, pp[rows, best]) if with_point else d
 
-    def _smooth_clear(self, patch, P: np.ndarray, iters: int) -> np.ndarray:
+    def _smooth_clear(self, patch, P: np.ndarray, iters: int,
+                      clearance: float | None = None) -> np.ndarray:
         """Laplacian smoothing that keeps the blade clearance.
 
         Plain smoothing minimises length and would pull the path straight back
         onto the blade it was routed around, undoing the clearance weighting.
         """
         P = np.asarray(P, float).copy()
-        if len(P) < 3:
-            return P
+        c = self.clearance if clearance is None else float(clearance)
+        if len(P) < 3 or c <= 0:
+            return patch.smooth(P, iters=iters)
         for _ in range(iters):
             mid = 0.5 * (P[:-2] + P[2:])
             P[1:-1] = 0.5 * P[1:-1] + 0.5 * mid
             _, P[1:-1] = patch.project(P[1:-1])
             d, near = self.obstacle_dist(P[1:-1], with_point=True)
-            bad = d < self.clearance
+            bad = d < c
             if bad.any():
                 v = P[1:-1][bad] - near[bad]
                 nv = np.linalg.norm(v, axis=1, keepdims=True)
                 v = np.divide(v, np.where(nv > 1e-12, nv, 1.0))
-                P[1:-1][bad] += (self.clearance - d[bad])[:, None] * v
+                P[1:-1][bad] += (c - d[bad])[:, None] * v
                 _, P[1:-1] = patch.project(P[1:-1])
         return P
 
@@ -285,8 +309,9 @@ class PatchPaths:
         P = np.vstack([p0[None], raw, p1[None]])
         P = resample(P, max(int(n), 40))
         P[0], P[-1] = p0, p1
-        if self.clearance > 0 and self.obstacle is not None and lab not in (7,):
-            P = self._smooth_clear(patch, P, self.smooth_iters)
+        c_eff = min(self.clearance, self.clearance_chord_frac * chord)
+        if c_eff > 0 and self.obstacle is not None and lab not in (7,):
+            P = self._smooth_clear(patch, P, self.smooth_iters, clearance=c_eff)
         else:
             P = patch.smooth(P, iters=self.smooth_iters)
         P[0], P[-1] = p0, p1
@@ -301,6 +326,8 @@ class PatchPaths:
                 "len": float(np.linalg.norm(np.diff(R, axis=0), axis=1).sum()),
                 "max_dist_patch": float(d.max()), "reason": None}
         info["arc_over_chord"] = info["len"] / chord if chord > 0 else np.inf
+        info["clearance_eff"] = float(c_eff)
+        info["max_kink_deg"] = float(max_kink_deg(R))
         if self.obstacle is not None:
             dob = self.obstacle_dist(R)
             info["blade_dist_min"] = float(dob.min())

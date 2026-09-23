@@ -61,7 +61,7 @@ from geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 from patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
                          blend_chord_edges, make_face_projector,
-                         write_debug_vtk)
+                         max_kink_deg, write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -361,6 +361,10 @@ def main() -> int:
                     help="keep geodesic edges this far away from the blade "
                          "patch (label 7). 0 = plain shortest path, which "
                          "hugs the blade root exactly as the GT edges do.")
+    ap.add_argument("--clearance-chord-frac", type=float, default=0.25,
+                    help="cap the effective blade clearance of an edge at this "
+                         "fraction of its own chord; a short edge cannot bow a "
+                         "full clearance away without creasing.")
     ap.add_argument("--blend-interior", action="store_true",
                     help="give interior chord edges a shape blended from the "
                          "parallel rails of their direction class (plan v4). "
@@ -400,7 +404,8 @@ def main() -> int:
                if args.surface_project else None)
     is_bnd = _boundary_edge_pred(fm.blocks, C_snap)
     geo = (PatchPaths(fm, records=records, stats=route_stats,
-                      is_boundary=is_bnd, clearance=args.blade_clearance)
+                      is_boundary=is_bnd, clearance=args.blade_clearance,
+                      clearance_chord_frac=args.clearance_chord_frac)
            if args.geodesic else None)
     # One record per block edge, in build_structures creation order, so the
     # debug VTK shows ALL 84 edges -- seam, geodesic and chord alike.
@@ -519,7 +524,7 @@ def main() -> int:
         # unless the edge was routed geodesically.
         st_fin = final_st[0]
         keys = list(st_fin.edge_pts.keys())
-        polys, kinds, labels, aoc = [], [], [], []
+        polys, kinds, labels, aoc, kinkd = [], [], [], [], []
         for i, key in enumerate(keys):
             Q = np.asarray(st_fin.edge_pts[key], float)
             rec = edge_log[i] if i < len(edge_log) else {
@@ -533,15 +538,17 @@ def main() -> int:
             kinds.append(int(kind))
             labels.append(int(rec["label"]))
             aoc.append(arc / chord if chord > 0 else 0.0)
+            kinkd.append(max_kink_deg(Q))
         write_debug_vtk(prefix + "_edges_debug.vtk", polys,
                         {"route_kind": kinds, "patch_label": labels,
-                         "arc_over_chord": aoc},
+                         "arc_over_chord": aoc, "max_kink_deg": kinkd},
                         f"meshtron {stem} block edge routing (route_kind "
                         f"0=chord 1=seam 2=geodesic 3=surfproj 4=blended)")
     if geo is not None:
         with open(prefix + "_routing.json", "w") as fh:
             json.dump(geo.debug, fh, indent=2)
 
+    kink_all = kinkd if (edge_log and final_st) else []
     snap_moves = np.linalg.norm(C_snap.reshape(-1, 3) - C.reshape(-1, 3), axis=1)
     summary = {
         "npz": args.npz,
@@ -560,6 +567,10 @@ def main() -> int:
             "enabled": bool(args.project_faces),
             "faces": int(route_stats.get("faces_projected", 0)),
             "by_label": route_stats.get("faces_projected_labels", {})},
+        "kink": {
+            "max_deg": float(max(kink_all, default=0.0)),
+            "p90_deg": float(np.percentile(kink_all, 90)) if kink_all else 0.0,
+            "edges_over_20deg": int(sum(1 for k in kink_all if k > 20.0))},
         "blend_interior": {
             "enabled": bool(args.blend_interior),
             "edges": int(route_stats.get("edges_blended", 0))},

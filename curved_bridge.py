@@ -60,8 +60,17 @@ def _classes_counts(tfi, bc, lat, H, B, P, target_h):
                 f"{type(exc).__name__}: {exc}")
 
 
-def _block_curved_mesh(tfi, r, dims, H, C_snap, st, pts_of):
-    """Ein Block: 6 Coons-Randflaechen + Gordon-Hall-Innenraum."""
+def _block_curved_mesh(tfi, r, dims, H, C_snap, st, pts_of,
+                       face_project_fn=None, bnd_faces=None):
+    """Ein Block: 6 Coons-Randflaechen + Gordon-Hall-Innenraum.
+
+    `face_project_fn(Gloc, ids, pts_of) -> Gloc` pulls the INTERIOR of a domain
+    boundary face onto its geometry patch before the volume is filled: a Coons
+    patch only interpolates its four curve edges, so on a curved patch its
+    interior cuts the chord.  That is the missing "faces" level of the
+    corners -> edges -> faces -> volume hierarchy.  Corners and edges stay
+    untouched, so neighbouring blocks still match exactly.
+    """
     ni, nj, nk = dims
     X = np.zeros((ni + 1, nj + 1, nk + 1, 3))
     for axis in (0, 1, 2):
@@ -72,6 +81,9 @@ def _block_curved_mesh(tfi, r, dims, H, C_snap, st, pts_of):
             o0, o1 = OTHER[axis]
             shp = (dims[o0] + 1, dims[o1] + 1)
             Gloc = orient_face(G, cids, ids, pts_of, shp)
+            if (face_project_fn is not None and bnd_faces is not None
+                    and frozenset(ids) in bnd_faces):
+                Gloc = face_project_fn(Gloc, ids, pts_of)
             sl = [slice(None)] * 3
             sl[axis] = 0 if side == 0 else -1
             X[tuple(sl)] = Gloc
@@ -81,7 +93,7 @@ def _block_curved_mesh(tfi, r, dims, H, C_snap, st, pts_of):
 def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
                   blocks: np.ndarray | None = None, fm=None,
                   write_edges: bool = True, path_fn=None,
-                  edge_post_fn=None) -> dict:
+                  edge_post_fn=None, face_project_fn=None) -> dict:
     """(nb,8,3) gesnappte Ecken (+ Kurvenmodell `fm`) -> CFD-VTK, Kurven-TFI.
 
     `path_fn(p0, p1, n) -> (pts, curve_id) | None` forwards the seam-graph
@@ -122,10 +134,14 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
                 key = frozenset(int(H[r, c]) for c in face_cycle(axis, side))
                 face_owners[key] = face_owners.get(key, 0) + 1
 
-    chunks, cells, bid, bnd_ids = [], [], [], []
+    bnd_faces = {k for k, v in face_owners.items() if v == 1}
+
+    chunks, cells, bid, bnd_ids, bnd_quads = [], [], [], [], []
     pts_of = {int(H[r, c]): C[r, c] for r in range(nb) for c in range(8)}
     for r in range(nb):
-        Xi = _block_curved_mesh(tfi, r, st.dims[r], H, C, st, pts_of)
+        Xi = _block_curved_mesh(tfi, r, st.dims[r], H, C, st, pts_of,
+                                face_project_fn=face_project_fn,
+                                bnd_faces=bnd_faces)
         base = sum(len(c) for c in chunks)
         ids = np.arange(base, base + Xi[..., 0].size).reshape(Xi.shape[:3])
         for axis in (0, 1, 2):
@@ -135,7 +151,11 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
                     continue
                 sl = [slice(None)] * 3
                 sl[axis] = 0 if side == 0 else -1
-                bnd_ids.append(ids[tuple(sl)].reshape(-1))
+                grid = ids[tuple(sl)]
+                bnd_ids.append(grid.reshape(-1))
+                bnd_quads.append(np.stack([grid[:-1, :-1], grid[1:, :-1],
+                                           grid[1:, 1:], grid[:-1, 1:]],
+                                          axis=-1).reshape(-1, 4))
         chunks.append(Xi.reshape(-1, 3))
         cells.append(tfi.block_cells(ids))
         bid.append(np.full(len(cells[-1]), r, int))
@@ -146,6 +166,8 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
     Hn = remap2[Hn]
     boundary_ids = (np.unique(remap2[np.concatenate(bnd_ids)])
                     if bnd_ids else np.empty(0, np.int64))
+    boundary_quads = (remap2[np.vstack(bnd_quads)] if bnd_quads
+                      else np.empty((0, 4), np.int64))
     ok, bnd = tfi.check_watertight(pts_w, Hn, verbose=False)
     sj = cb.scaled_jacobians(pts_w, Hn)
     report.update({"cells_after": int(len(Hn)), "points_after": int(len(pts_w)),
@@ -161,6 +183,7 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
         report["out_edges_vtk"] = os.path.abspath(epath)
     report["buckets"] = _bucket_hist(st)
     report["boundary_point_ids"] = boundary_ids
+    report["boundary_quads"] = boundary_quads
     return report
 
 

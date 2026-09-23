@@ -426,3 +426,50 @@ def blend_chord_edges(st, corner_ids: np.ndarray, C_snap: np.ndarray,
     if stats is not None:
         stats["edges_blended"] = stats.get("edges_blended", 0) + done
     return done
+
+
+def make_face_projector(pp: "PatchPaths", stats: dict | None = None):
+    """face_project_fn for refill_curved: pull a boundary face onto its patch.
+
+    Only the INTERIOR of the face grid moves; the four edge rows stay as the
+    routed curves, so neighbouring blocks keep matching exactly and the mesh
+    stays watertight.  The patch is chosen from the labels the four corners
+    agree on; when that is ambiguous, the majority label of the projected
+    interior decides (restricted to the corner candidates when possible).
+    """
+    fm = pp.fm
+
+    def fn(G: np.ndarray, ids, pts_of) -> np.ndarray:
+        if G.shape[0] < 3 or G.shape[1] < 3:
+            return G
+        inner = G[1:-1, 1:-1].reshape(-1, 3)
+        cands: set | None = None
+        for i in ids:
+            labs = pp.endpoint_labels(np.asarray(pts_of[int(i)], float))
+            cands = labs if cands is None else (cands & labs)
+        if cands is not None and len(cands) == 1:
+            lab = int(next(iter(cands)))
+        else:
+            _, tri, _ = fm.surface_nearest(inner, k=32)
+            labs = np.asarray(fm.surface_tri_label[tri], np.int64)
+            vals, counts = np.unique(labs, return_counts=True)
+            if cands:
+                keep = np.isin(vals, list(cands))
+                if keep.any():
+                    vals, counts = vals[keep], counts[keep]
+            lab = int(vals[int(np.argmax(counts))])
+        patch = pp.patches.get(lab)
+        if patch is None:
+            return G
+        _, proj = patch.project(inner)
+        out = np.array(G, float, copy=True)
+        out[1:-1, 1:-1] = proj.reshape(G.shape[0] - 2, G.shape[1] - 2, 3)
+        if stats is not None:
+            stats["faces_projected"] = stats.get("faces_projected", 0) + 1
+            stats.setdefault("faces_projected_labels", {})
+            k = str(lab)
+            stats["faces_projected_labels"][k] = \
+                stats["faces_projected_labels"].get(k, 0) + 1
+        return out
+
+    return fn

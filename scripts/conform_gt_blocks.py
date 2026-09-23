@@ -60,7 +60,8 @@ from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 from patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
-                         blend_chord_edges, write_debug_vtk)
+                         blend_chord_edges, make_face_projector,
+                         write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -351,6 +352,11 @@ def main() -> int:
                          "path cannot cross the blade footprint, so edges run "
                          "AROUND the blade; no arc/chord guard. Writes "
                          "<prefix>_geodesic_edges.vtk + _routing.json")
+    ap.add_argument("--project-faces", action="store_true",
+                    help="pull the interior of every domain boundary face onto "
+                         "its npz patch before Gordon-Hall (plan v4 S2). Coons "
+                         "faces only interpolate their four edges, so on a "
+                         "curved patch the interior cuts the chord.")
     ap.add_argument("--blade-clearance", type=float, default=0.0,
                     help="keep geodesic edges this far away from the blade "
                          "patch (label 7). 0 = plain shortest path, which "
@@ -441,9 +447,13 @@ def main() -> int:
         if args.blend_interior:
             blend_chord_edges(st, corner_ids, C_s, blks, stats=route_stats)
 
+    face_fn = (make_face_projector(geo, route_stats)
+               if (args.project_faces and geo is not None) else None)
+
     curved_path = prefix + "_refill.vtk"
     rep = refill_curved(C_snap, args.target_h, curved_path, fm=target,
-                        path_fn=path_fn, edge_post_fn=edge_post_fn)
+                        path_fn=path_fn, edge_post_fn=edge_post_fn,
+                        face_project_fn=face_fn)
 
     # Boundary conformity tripwire on the exported mesh.
     import export_vtk  # noqa: E402  (curved_bridge inserted the path)
@@ -451,6 +461,7 @@ def main() -> int:
     # rebuild via the same weld path is overkill; instead measure on the VTK.
     # Simplest: re-derive boundary points from rep is not possible -> parse VTK.
     pts_w, Hn = _read_vtk_mesh(curved_path)
+    bquads = rep.pop("boundary_quads", None)
     bids = rep.pop("boundary_point_ids", None)
     if bids is not None and len(bids):
         # Boundary from the block topology (robust where cells fold), not from
@@ -464,6 +475,32 @@ def main() -> int:
     else:
         max_bnd = _boundary_dist(fm, pts_w, Hn)
         bnd_stats = {"max": max_bnd}
+
+    if bquads is not None and len(bquads):
+        # The domain boundary as quads, coloured by distance to the npz
+        # surface -- the same point set the gate measures, so the picture and
+        # the number cannot disagree.
+        d_all, _, _ = fm.surface_nearest(pts_w, k=32)
+        bpath = prefix + "_boundary.vtk"
+        with open(bpath, "w") as fh:
+            fh.write("# vtk DataFile Version 2.0\n"
+                     f"meshtron {stem} domain boundary vs npz surface\n"
+                     "ASCII\nDATASET UNSTRUCTURED_GRID\n")
+            fh.write(f"POINTS {len(pts_w)} double\n")
+            for q in pts_w:
+                fh.write(f"{q[0]:.9f} {q[1]:.9f} {q[2]:.9f}\n")
+            fh.write(f"CELLS {len(bquads)} {5 * len(bquads)}\n")
+            for q in bquads:
+                fh.write(f"4 {q[0]} {q[1]} {q[2]} {q[3]}\n")
+            fh.write(f"CELL_TYPES {len(bquads)}\n")
+            for _ in bquads:
+                fh.write("9\n")
+            fh.write(f"POINT_DATA {len(pts_w)}\n"
+                     "SCALARS dist_npz_surface double 1\nLOOKUP_TABLE default\n")
+            for v in d_all:
+                fh.write(f"{float(v):.12e}\n")
+        print(f"saved {bpath}  ({len(bquads)} boundary quads, "
+              f"scalar dist_npz_surface)")
 
     compare_path = prefix + "_compare.vtk"
     gt_blocks = [[int(j) for j in b] for b in fm.blocks]
@@ -519,6 +556,10 @@ def main() -> int:
         "multi_patch_walk": {
             "enabled": bool(args.surface_project),
             "edges": int(route_stats["edges_walked_multi_patch"])},
+        "project_faces": {
+            "enabled": bool(args.project_faces),
+            "faces": int(route_stats.get("faces_projected", 0)),
+            "by_label": route_stats.get("faces_projected_labels", {})},
         "blend_interior": {
             "enabled": bool(args.blend_interior),
             "edges": int(route_stats.get("edges_blended", 0))},

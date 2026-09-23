@@ -101,6 +101,31 @@ def _axial_pairing(entry_ids, exit_ids, edge_index):
     return pairs
 
 
+# VTK-6 Hexaeder-Kanten als Positionspaare in der Block-Eckreihenfolge.
+_HEX_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
+              (0, 4), (1, 5), (2, 6), (3, 7))
+
+
+def _axial_pairing_local(entry_ids, exit_ids, blk):
+    """entry_id -> exit_id via Block-lokale VTK-Kanten (ohne Wireframe).
+
+    blk: 8 globale Vertex-IDs in VTK-Reihenfolge. Fuer strukturell valide
+    Hexa-Blocks exakt (gegenueberliegende Faces sind kantenseitig nur ueber
+    Achsenkanten verbunden); leeres Dict bei unklarer Struktur.
+    """
+    exit_set = set(int(x) for x in exit_ids)
+    nbrs = {int(v): set() for v in blk}
+    for a, b in _HEX_EDGES:
+        nbrs[int(blk[a])].add(int(blk[b]))
+        nbrs[int(blk[b])].add(int(blk[a]))
+    pairs = {}
+    for e in entry_ids:
+        cands = (nbrs.get(int(e), set()) & exit_set) - set(pairs.values())
+        if len(cands) == 1:
+            pairs[int(e)] = int(next(iter(cands)))
+    return pairs
+
+
 # ---------------------------------------------------------------- Row-Plan
 def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None):
     """Deterministischer Hexa-Row-Plan (azimutale Reihen, CCW).
@@ -279,8 +304,9 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
             perm_e = _ring_min_perimeter(e_pts)
             rot_e = _rotate_orient_ring(perm_e, e_pts, x_pts.mean(0) - e_pts.mean(0))
             entry_ref = [entry_ids[p] for p in rot_e]
-            pairs = (_axial_pairing(entry_ref, exit_ids_list, edges)
-                     if edges.numel() > 0 else {})
+            pairs = _axial_pairing_local(entry_ref, exit_ids_list, blks[b])
+            if len(pairs) < 4 and edges.numel() > 0:
+                pairs = _axial_pairing(entry_ref, exit_ids_list, edges)
 
             def _follow(seq, pairs=pairs):
                 if len(pairs) == 4 and all(int(e) in pairs for e in seq):
@@ -305,7 +331,27 @@ def build_row_plan(blks, Vcart, edges=None, start_rule='min_theta', z_split=None
                 if prev_exit is not None and cur_row:  # Break: neue Row
                     out_rows.append(cur_row)
                     cur_row = []
-                entry_seq = entry_ref
+                # Head-Ring verifizieren: min-Umfang kann auf Sattelflaechen
+                # Bowties liefern. Erste zyklisch-propere Variante mit
+                # vol>0 & minJ>-1e-9 gewinnt; sonst Fallback auf entry_ref.
+                target = x_pts.mean(0) - e_pts.mean(0)
+                seen_rings = set()
+                for rep in (tuple(perm_e), (0, 1, 3, 2), (0, 2, 1, 3)):
+                    cand = tuple(_rotate_orient_ring(list(rep), e_pts, target))
+                    if cand in seen_rings:
+                        continue
+                    seen_rings.add(cand)
+                    seq_c = [entry_ids[p] for p in cand]
+                    ex_c = _follow(seq_c)
+                    if ex_c is None:
+                        continue
+                    pts8 = np.stack([V[int(v)].tolist() for v in seq_c + ex_c])[None]
+                    if (float(hex_signed_volumes(pts8)[0]) > 0.0
+                            and float(hex_min_jacobian(pts8)[0]) > -1e-9):
+                        entry_seq = seq_c
+                        break
+                if entry_seq is None:
+                    entry_seq = entry_ref
             exit_seq = _follow(entry_seq)
             if exit_seq is None:  # Fallback ohne Wireframe: lex (x,z)
                 exit_seq = [exit_ids_list[p] for p in
@@ -372,7 +418,7 @@ class HexaRowTokenizer:
         if emit_override is None:
             rows, emit = build_row_plan(blks, Vc, edges=edges)
         else:
-            rows, emit = emit_override, None
+            rows, emit = emit_override
         c = self.core
         toks = [c.start_token]
         cart = (coords == 'cart')
@@ -443,8 +489,19 @@ class HexaRowTokenizer:
                 toks.append(c.sep_token)
         else:
             for row in rows:
+                prev_set = None
                 for bi, b in enumerate(row):
-                    for vid in (emit[b] if bi == 0 else emit[b][4:8]):
+                    vids = emit[b] if bi == 0 else emit[b][4:8]
+                    tq = [tuple(vq(int(v))) for v in vids]
+                    # Quantisierungs-Guard (wie Face-Pfad): zwei verschiedene
+                    # Ecken duerfen nicht auf dasselbe Token-Tupel fallen,
+                    # sonst verliert der Decode eine Ecke (Index-Wiederverwendung).
+                    if len(set(tq)) < len(tq) or (prev_set is not None and set(tq) & prev_set):
+                        raise DegenerateBlockError(
+                            f"block {b}: Quantisierungs-Kollision, "
+                            f"Emissions-Tupels nicht eindeutig")
+                    prev_set = set(tq)
+                    for vid in vids:
                         toks += vq(vid)
                     if granularity == 'block' and eoe:
                         toks.append(c.sep2_token)

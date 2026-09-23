@@ -297,15 +297,18 @@ HEX_FACES = ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5),
              (2, 3, 7, 6), (3, 0, 4, 7))
 
 
-def _boundary_edge_pred(fm, C_snap: np.ndarray):
+def _boundary_edge_pred(blocks, C_snap: np.ndarray):
     """(p0, p1) -> True when the block edge lies on a DOMAIN BOUNDARY face.
 
     A quad face shared by two blocks is interior; a face owned by exactly one
     block bounds the domain.  Only the edges of those faces may be routed on
     an npz patch -- interior edges run through the volume and must stay
     chords, otherwise they get dragged onto a surface.
+
+    `blocks` is the (nb, 8) corner-index array of the block structure -- GT
+    (`fm.blocks`) or transformer-generated alike; nothing here reads GT data.
     """
-    blocks = np.asarray(fm.blocks, np.int64)
+    blocks = np.asarray(blocks, np.int64)
     key_of = {}
     for r in range(blocks.shape[0]):
         for c in range(8):
@@ -385,7 +388,7 @@ def main() -> int:
     seam_fn = _seam_path_fn(seam, records, route_stats)
     surf_fn = (_surface_path_fn(fm, route_stats, records=records)
                if args.surface_project else None)
-    is_bnd = _boundary_edge_pred(fm, C_snap)
+    is_bnd = _boundary_edge_pred(fm.blocks, C_snap)
     geo = (PatchPaths(fm, records=records, stats=route_stats,
                       is_boundary=is_bnd)
            if args.geodesic else None)

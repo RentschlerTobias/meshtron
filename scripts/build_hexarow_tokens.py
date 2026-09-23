@@ -6,6 +6,7 @@ groups original + n2 + n3 augmentations per geometry, so we hold out one
 geometry family per few samples (index-based % split documented in report).
 """
 import argparse
+import json
 import multiprocessing as mp
 import os
 import sys
@@ -20,6 +21,9 @@ from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402 (repo-root on sys.
 _DATA = None
 _TOK = None
 _COORDS = 'polar'  # fork-global: _proc_one liest hier; main() setzt vor Pool-Start
+_FAMILY = False  # fork-global: Konditionierungsfelder je Item einbetten
+_DIR_PREFIX = "batch"  # fork-global: Praefix fuer item["dir"]
+_GEOMS = {}  # fork-global: name -> geom_id aus --geom-ids
 
 
 def bounds_from(data, pad=0.02):
@@ -43,10 +47,19 @@ def _proc_one(i):
     except Exception as e:
         return i, None, f"SKIP sample {i} ({s.get('name', '?')}): {type(e).__name__}: {e}"
     lv = s.get("subdiv_n", None)
-    return i, {"tokens": torch.tensor(ids, dtype=torch.long),
-               "name": s.get("name", f"sample{i}"),
-               "blocks": int(s["faces"].shape[1]),
-               "level": int(lv) if lv is not None and lv >= 1 else 1}, ""
+    name = s.get("name", f"sample{i}")
+    item = {"tokens": torch.tensor(ids, dtype=torch.long),
+            "name": name,
+            "blocks": int(s["faces"].shape[1]),
+            "level": int(lv) if lv is not None and lv >= 1 else 1}
+    if _FAMILY:
+        item["dir"] = f"{_DIR_PREFIX}/{name}"
+        item["coords"] = _COORDS
+        item["surface_points"] = s.get("surface_points")
+        item["is_blade"] = s.get("is_blade")
+        item["is_band"] = s.get("is_band")
+        item["geom_id"] = _GEOMS.get(name.rsplit("_n", 1)[0])
+    return i, item, ""
 
 
 def main():
@@ -67,10 +80,20 @@ def main():
     ap.add_argument("--coords", choices=("polar", "cart"), default="polar",
                     help="Vertex-Token-Koordinaten: polar (4/Vert) oder cart (3/Vert); "
                          "cart braucht vertices_cartesian im Sample")
+    ap.add_argument("--family", action="store_true",
+                    help="Konditionierungsfelder (dir/surface_points/is_blade/"
+                         "is_band/geom_id/coords) je Item einbetten")
+    ap.add_argument("--dir-prefix", default="batch",
+                    help="Praefix des npz-Verzeichnisses fuer item['dir']; "
+                         "npz liegt unter data/hex3d_algohex/<dir>/sample.npz")
+    ap.add_argument("--geom-ids", default="data/geom_ids.json",
+                    help="JSON name->geom_id; '_meta' wird ignoriert")
     args = ap.parse_args()
 
-    global _DATA, _TOK, _COORDS
+    global _DATA, _TOK, _COORDS, _FAMILY, _DIR_PREFIX, _GEOMS
     _COORDS = args.coords
+    _FAMILY = bool(args.family)
+    _DIR_PREFIX = args.dir_prefix
     _DATA = torch.load(args.src, weights_only=False)
     if isinstance(_DATA, dict) and "samples" in _DATA:
         _DATA = _DATA["samples"]
@@ -91,6 +114,17 @@ def main():
         if missing:
             raise ValueError(f"--coords cart: vertices_cartesian fehlt in samples: "
                              f"{missing}")
+    if args.family:
+        import os
+        if os.path.exists(args.geom_ids):
+            _GEOMS = json.loads(open(args.geom_ids).read())
+            _GEOMS.pop("_meta", None)
+        else:
+            _GEOMS = {}
+        missing = [s.get('name', '?') for s in _DATA
+                   if s.get('surface_points') is None]
+        if missing:
+            raise ValueError(f"--family: surface_points fehlt in: {missing[:5]}")
     if args.max_blocks:
         before = len(_DATA)
         _DATA = [s for s in _DATA if int(s["faces"].shape[1]) <= args.max_blocks]
@@ -148,9 +182,12 @@ def main():
         train = [only]
         val = [only]
     npt = 3 if args.coords == 'cart' else 4
-    torch.save({"train": train, "val": val, "vocab": vocab,
-                "r_bounds": rb, "z_bounds": zb,
-                "coords": args.coords, "npt": npt}, args.out)
+    payload = {"train": train, "val": val, "vocab": vocab,
+               "r_bounds": rb, "z_bounds": zb,
+               "coords": args.coords, "npt": npt}
+    if _FAMILY:
+        payload["family"] = f"{args.coords}-v1"
+    torch.save(payload, args.out)
     print(f"wrote {args.out}: {len(train)} train / {len(val)} val ({nskip} skips)")
 
 

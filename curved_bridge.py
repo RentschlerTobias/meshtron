@@ -80,7 +80,8 @@ def _block_curved_mesh(tfi, r, dims, H, C_snap, st, pts_of):
 
 def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
                   blocks: np.ndarray | None = None, fm=None,
-                  write_edges: bool = True, path_fn=None) -> dict:
+                  write_edges: bool = True, path_fn=None,
+                  edge_post_fn=None) -> dict:
     """(nb,8,3) gesnappte Ecken (+ Kurvenmodell `fm`) -> CFD-VTK, Kurven-TFI.
 
     `path_fn(p0, p1, n) -> (pts, curve_id) | None` forwards the seam-graph
@@ -107,14 +108,34 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
 
     from tfi import class_of_axis
     cof = class_of_axis(classes)
-    st = build_structures(fm, H, C, blocks, counts, cof, path_fn=path_fn)
+    st = build_structures(fm, H, C, blocks, counts, cof, path_fn=path_fn,
+                          edge_post_fn=edge_post_fn)
 
-    chunks, cells, bid = [], [], []
+    # Domain boundary from the BLOCK topology: a block face owned by exactly
+    # one block bounds the domain.  Deriving it from the fine mesh instead is
+    # unreliable where cells fold -- collapsed points there make interior
+    # facets look like boundary facets.
+    face_owners: dict = {}
+    for r in range(nb):
+        for axis in (0, 1, 2):
+            for side in (0, 1):
+                key = frozenset(int(H[r, c]) for c in face_cycle(axis, side))
+                face_owners[key] = face_owners.get(key, 0) + 1
+
+    chunks, cells, bid, bnd_ids = [], [], [], []
     pts_of = {int(H[r, c]): C[r, c] for r in range(nb) for c in range(8)}
     for r in range(nb):
         Xi = _block_curved_mesh(tfi, r, st.dims[r], H, C, st, pts_of)
         base = sum(len(c) for c in chunks)
         ids = np.arange(base, base + Xi[..., 0].size).reshape(Xi.shape[:3])
+        for axis in (0, 1, 2):
+            for side in (0, 1):
+                key = frozenset(int(H[r, c]) for c in face_cycle(axis, side))
+                if face_owners[key] != 1:
+                    continue
+                sl = [slice(None)] * 3
+                sl[axis] = 0 if side == 0 else -1
+                bnd_ids.append(ids[tuple(sl)].reshape(-1))
         chunks.append(Xi.reshape(-1, 3))
         cells.append(tfi.block_cells(ids))
         bid.append(np.full(len(cells[-1]), r, int))
@@ -123,6 +144,8 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
     Bn = np.concatenate(bid)
     pts_w, remap2 = tfi.weld(pts)
     Hn = remap2[Hn]
+    boundary_ids = (np.unique(remap2[np.concatenate(bnd_ids)])
+                    if bnd_ids else np.empty(0, np.int64))
     ok, bnd = tfi.check_watertight(pts_w, Hn, verbose=False)
     sj = cb.scaled_jacobians(pts_w, Hn)
     report.update({"cells_after": int(len(Hn)), "points_after": int(len(pts_w)),
@@ -137,6 +160,7 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
         write_curved_edges_vtk(epath, st)
         report["out_edges_vtk"] = os.path.abspath(epath)
     report["buckets"] = _bucket_hist(st)
+    report["boundary_point_ids"] = boundary_ids
     return report
 
 

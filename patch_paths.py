@@ -1,0 +1,344 @@
+"""patch_paths.py -- geodesic routing of block edges on labelled npz patches.
+
+Replaces the projection+guard machinery of scripts/conform_gt_blocks.py
+(_surface_path_fn): instead of projecting a straight chord and rejecting the
+result when the projection misbehaves, a block edge is first ASSOCIATED with
+one npz label patch and then routed as a shortest path ON that patch.
+
+Why this is different in kind:
+  - A path on a patch cannot leave the patch.  The blade footprint is a hole
+    in the hub patch, so a hub path runs AROUND the blade by construction.
+    Cutting an edge at the blade (the old _walk) produced edges that ran
+    THROUGH the blade region; those block structures were invalid.
+  - No arc/chord guard.  Running around the blade legitimately makes the arc
+    much longer than the chord; the old 1.15*chord guard forbade exactly the
+    correct answer.
+
+Pipeline per edge:
+  1. candidate labels from both endpoints (nearest triangle + seam labels)
+  2. Dijkstra on the patch's triangle-edge graph, per candidate
+  3. pick the candidate with the shortest path
+  4. smooth the polyline (Laplacian + reprojection onto the same patch)
+  5. resample to n points, endpoints pinned to the input corners
+
+Debug artifacts: every routed edge is recorded (candidates, chosen label,
+raw/smoothed length, chord, max distance to the patch) and can be dumped as
+VTK polylines via write_debug_vtk().
+"""
+from __future__ import annotations
+
+import sys
+
+import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import dijkstra
+from scipy.spatial import cKDTree
+
+HEX3D_REPO = ("/home/t1dde/hydrostack_pipeline/stack/domain_partition_3D/"
+              "experimentell/hex3d_algohex")
+
+GEODESIC_ID_BASE = 920000
+
+
+def _closest_point_on_tris():
+    if HEX3D_REPO not in sys.path:
+        sys.path.insert(0, HEX3D_REPO)
+    from clean_blocks import _closest_point_on_tris as fn
+    return fn
+
+
+class Patch:
+    """One npz label patch: its triangles, its vertex graph, its projection."""
+
+    def __init__(self, points: np.ndarray, tris: np.ndarray, label: int):
+        self.label = int(label)
+        self.tris = np.asarray(tris, np.int64)
+        vids = np.unique(self.tris)
+        self.vids = vids                       # global vertex ids of the patch
+        self.g2l = {int(v): i for i, v in enumerate(vids)}
+        self.pts = np.asarray(points, float)[vids]   # local vertex coords
+        loc = np.vectorize(self.g2l.__getitem__)(self.tris)
+        self.ltris = loc
+        # Unique undirected edges.  coo_matrix SUMS duplicate entries on
+        # tocsr(), so feeding every triangle edge twice (interior edges appear
+        # in two triangles, boundary edges in one) would double the weight of
+        # interior edges and make Dijkstra hug the patch boundary.
+        pairs = np.concatenate([loc[:, [0, 1]], loc[:, [1, 2]], loc[:, [2, 0]]])
+        pairs = np.unique(np.sort(pairs, axis=1), axis=0)
+        i, j = pairs[:, 0], pairs[:, 1]
+        w = np.linalg.norm(self.pts[i] - self.pts[j], axis=1)
+        n = len(vids)
+        self.graph = coo_matrix(
+            (np.concatenate([w, w]),
+             (np.concatenate([i, j]), np.concatenate([j, i]))),
+            shape=(n, n)).tocsr()
+        self.vtree = cKDTree(self.pts)
+        self.ttree = cKDTree(self.pts[loc].mean(axis=1))
+        self._cpt = _closest_point_on_tris()
+
+    # -- projection -------------------------------------------------------
+    def project(self, q: np.ndarray, k: int = 16):
+        """(...,3) -> (dist, point) onto THIS patch only."""
+        q = np.asarray(q, float).reshape(-1, 3)
+        _, cand = self.ttree.query(q, k=min(k, len(self.ltris)))
+        cand = np.atleast_2d(cand)
+        T = self.ltris[cand]
+        d2, p = self._cpt(q, self.pts[T[..., 0]], self.pts[T[..., 1]],
+                          self.pts[T[..., 2]])
+        best = np.argmin(d2, axis=1)
+        rows = np.arange(len(q))
+        return np.sqrt(d2[rows, best]), p[rows, best]
+
+    # -- shortest path ----------------------------------------------------
+    def path(self, p0: np.ndarray, p1: np.ndarray):
+        """Dijkstra polyline between the patch vertices nearest to p0 / p1."""
+        _, i0 = self.vtree.query(np.asarray(p0, float))
+        _, i1 = self.vtree.query(np.asarray(p1, float))
+        i0, i1 = int(i0), int(i1)
+        if i0 == i1:
+            return np.stack([self.pts[i0]]), 0.0
+        dist, pred = dijkstra(self.graph, indices=i0, return_predecessors=True)
+        if not np.isfinite(dist[i1]):
+            return None, np.inf          # different connected components
+        chain = [i1]
+        while chain[-1] != i0:
+            nxt = int(pred[chain[-1]])
+            if nxt < 0:
+                return None, np.inf
+            chain.append(nxt)
+        chain.reverse()
+        return self.pts[chain], float(dist[i1])
+
+    # -- smoothing --------------------------------------------------------
+    def smooth(self, P: np.ndarray, iters: int = 60, w: float = 0.5):
+        """Laplacian smoothing with reprojection; endpoints stay fixed."""
+        P = np.asarray(P, float).copy()
+        if len(P) < 3:
+            return P
+        for _ in range(iters):
+            mid = 0.5 * (P[:-2] + P[2:])
+            P[1:-1] = (1.0 - w) * P[1:-1] + w * mid
+            _, P[1:-1] = self.project(P[1:-1])
+        return P
+
+
+def resample(Q: np.ndarray, n: int) -> np.ndarray:
+    """Polyline -> n arc-length equidistant points."""
+    Q = np.asarray(Q, float)
+    if len(Q) == 1:
+        return np.repeat(Q, n, axis=0)
+    s = np.concatenate([[0.0],
+                        np.cumsum(np.linalg.norm(np.diff(Q, axis=0), axis=1))])
+    if s[-1] <= 1e-12:
+        return np.repeat(Q[:1], n, axis=0)
+    q = np.linspace(0.0, s[-1], n)
+    return np.stack([np.interp(q, s, Q[:, k]) for k in range(3)], axis=1)
+
+
+class PatchPaths:
+    """path_fn(p0, p1, n) -> (points, curve_id) | None, geodesic on a patch."""
+
+    def __init__(self, fm, records: list | None = None, smooth_iters: int = 300,
+                 stats: dict | None = None, is_boundary=None):
+        self.fm = fm
+        self.seam = fm.seam_curves
+        self.stats = stats if stats is not None else {}
+        self.smooth_iters = int(smooth_iters)
+        # Only edges that bound a DOMAIN BOUNDARY face may be routed on a
+        # patch.  Interior edges (e.g. the radial hub->shroud edges shared by
+        # five blocks) run through the volume; forcing them onto a surface
+        # drags the block structure off the geometry.
+        self.is_boundary = is_boundary
+        self.debug: list[dict] = []
+        self.patches: dict[int, Patch] = {}
+        labels = np.unique(fm.surface_tri_label)
+        for lab in labels:
+            sel = fm.surface_tri_label == lab
+            self.patches[int(lab)] = Patch(fm.surface_points,
+                                           fm.surface_tris[sel], int(lab))
+        self.rec: dict = {}
+        for r in (records or []):
+            key = np.round(np.asarray(r["target"], float), 12).tobytes()
+            self.rec[key] = r
+
+    # -- association ------------------------------------------------------
+    def endpoint_labels(self, p: np.ndarray) -> set[int]:
+        """Labels a corner may belong to: nearest triangle + seam patch pair."""
+        d, tri, _ = self.fm.surface_nearest(np.stack([p, p]), k=32)
+        labs = {int(self.fm.surface_tri_label[tri[0]])}
+        r = self.rec.get(np.round(np.asarray(p, float), 12).tobytes())
+        if r is not None and int(r["curve_id"]) >= 0:
+            c = int(r["curve_id"])
+            labs |= {int(self.seam.label_lo[c]), int(self.seam.label_hi[c])}
+        return labs
+
+    def candidates(self, p0, p1) -> list[int]:
+        a, b = self.endpoint_labels(p0), self.endpoint_labels(p1)
+        both = sorted(a & b)
+        return both if both else sorted(a | b)
+
+    # -- routing ----------------------------------------------------------
+    def route(self, p0: np.ndarray, p1: np.ndarray, n: int):
+        p0 = np.asarray(p0, float)
+        p1 = np.asarray(p1, float)
+        chord = float(np.linalg.norm(p1 - p0))
+        cands = self.candidates(p0, p1)
+        best = None
+        tried = {}
+        for lab in cands:
+            patch = self.patches.get(lab)
+            if patch is None:
+                continue
+            raw, length = patch.path(p0, p1)
+            tried[lab] = float(length)
+            if raw is None:
+                continue
+            if best is None or length < best[1]:
+                best = (lab, length, raw)
+        if best is None:
+            return None, {"chord": chord, "candidates": cands, "tried": tried,
+                          "chosen": None, "reason": "no path"}
+        lab, raw_len, raw = best
+        patch = self.patches[lab]
+        # The Dijkstra path only fixes the homotopy class (which side of the
+        # blade footprint the edge passes).  Smoothing with reprojection then
+        # relaxes it to the geodesic INSIDE that class.  Resample first: on the
+        # raw vertex chain a Laplacian diffuses far too slowly to straighten a
+        # zigzag, which left planar patches at arc/chord 1.6.
+        P = np.vstack([p0[None], raw, p1[None]])
+        P = resample(P, max(int(n), 40))
+        P[0], P[-1] = p0, p1
+        P = patch.smooth(P, iters=self.smooth_iters)
+        P[0], P[-1] = p0, p1
+        R = resample(P, n)
+        # resample interpolates BETWEEN projected points, which lifts the
+        # samples off the patch again -> project once more, endpoints pinned.
+        _, R[1:-1] = patch.project(R[1:-1])
+        R[0], R[-1] = p0, p1
+        d, _ = patch.project(R)
+        info = {"chord": chord, "candidates": cands, "tried": tried,
+                "chosen": lab, "raw_len": float(raw_len),
+                "len": float(np.linalg.norm(np.diff(R, axis=0), axis=1).sum()),
+                "max_dist_patch": float(d.max()), "reason": None}
+        info["arc_over_chord"] = info["len"] / chord if chord > 0 else np.inf
+        return R, info
+
+    def __call__(self, p0, p1, n):
+        chord = float(np.linalg.norm(np.asarray(p1) - np.asarray(p0)))
+        if not np.isfinite(chord) or chord <= 1e-12:
+            return None
+        if self.is_boundary is not None and not self.is_boundary(p0, p1):
+            self.debug.append({"poly": len(self.debug), "chord": chord,
+                               "candidates": [], "tried": {}, "chosen": None,
+                               "reason": "interior edge"})
+            return None
+        R, info = self.route(p0, p1, n)
+        info["poly"] = len(self.debug)
+        self.debug.append(info)
+        if R is None:
+            return None
+        self.stats["edges_geodesic"] = self.stats.get("edges_geodesic", 0) + 1
+        return R, GEODESIC_ID_BASE + self.stats["edges_geodesic"]
+
+
+def write_debug_vtk(path: str, polys: list[np.ndarray],
+                    scalars: dict | list,
+                    title: str = "meshtron edge routing debug") -> None:
+    """Polylines as VTK polyline cells with one or more cell scalar arrays.
+
+    `scalars` is {name: values} (int -> int array, float -> double array).
+    A bare list is accepted as the legacy single "patch_label" array."""
+    if not isinstance(scalars, dict):
+        scalars = {"patch_label": list(scalars)}
+    pts, cells = [], []
+    for Q in polys:
+        base = len(pts)
+        pts.extend(np.asarray(Q, float).tolist())
+        cells.append((base, len(Q)))
+    with open(path, "w") as fh:
+        fh.write(f"# vtk DataFile Version 2.0\n{title}\nASCII\n")
+        fh.write("DATASET UNSTRUCTURED_GRID\n")
+        fh.write(f"POINTS {len(pts)} double\n")
+        for p in pts:
+            fh.write(f"{p[0]:.9f} {p[1]:.9f} {p[2]:.9f}\n")
+        fh.write(f"CELLS {len(cells)} {sum(n + 1 for _b, n in cells)}\n")
+        for b, n in cells:
+            fh.write(f"{n} " + " ".join(str(b + i) for i in range(n)) + "\n")
+        fh.write(f"CELL_TYPES {len(cells)}\n")
+        for _ in cells:
+            fh.write("4\n")
+        fh.write(f"CELL_DATA {len(cells)}\n")
+        for name, vals in scalars.items():
+            isint = all(isinstance(v, (int, np.integer)) for v in vals)
+            fh.write(f"SCALARS {name} {'int' if isint else 'double'} 1\n")
+            fh.write("LOOKUP_TABLE default\n")
+            for v in vals:
+                fh.write(f"{int(v)}\n" if isint else f"{float(v):.9f}\n")
+
+
+BLEND_ID_BASE = 930000
+
+
+def blend_chord_edges(st, corner_ids: np.ndarray, C_snap: np.ndarray,
+                      blocks: np.ndarray, stats: dict | None = None) -> int:
+    """Give interior chord edges a shape blended from their parallel rails.
+
+    An interior block edge runs through the volume, so no patch constrains it
+    and it stays a straight chord.  The block topology already provides the
+    "parallel transport" a frame field would have to solve for: within a block,
+    the three other edges of the same direction class are the rails parallel to
+    this edge.  Their deviation from their own chord, averaged, is added to our
+    chord.  Boundary edges are left alone -- their patch already determines
+    them, and any added bow is removed again by the reprojection.
+
+    Runs as `edge_post_fn` of build_structures, i.e. BEFORE the Coons faces are
+    built, so the new shape propagates into faces and volume.
+    Returns the number of edges rewritten.
+    """
+    from edge_curves import CORNERS, local_edges
+
+    occ: dict = {}
+    for r in range(len(blocks)):
+        for li, lj, ax in local_edges():
+            a, b = int(corner_ids[r, li]), int(corner_ids[r, lj])
+            occ.setdefault((a, b) if a < b else (b, a), []).append((r, ax, li, lj))
+
+    def canon(r, li, lj, ax):
+        """Local corner pair oriented from side 0 to side 1 of the axis."""
+        return (li, lj) if CORNERS[li][ax] == 0 else (lj, li)
+
+    done = 0
+    for key in list(st.edge_pts.keys()):
+        if st.edge_curve.get(key, -1) >= 0:
+            continue                      # already an exact curve
+        pts = np.asarray(st.edge_pts[key], float)
+        devs = []
+        for (r, ax, li, lj) in occ.get(key, []):
+            for (li2, lj2, ax2) in local_edges():
+                if ax2 != ax:
+                    continue
+                a2, b2 = int(corner_ids[r, li2]), int(corner_ids[r, lj2])
+                k2 = (a2, b2) if a2 < b2 else (b2, a2)
+                if k2 == key or st.edge_curve.get(k2, -1) < 0:
+                    continue
+                lo2, hi2 = canon(r, li2, lj2, ax)
+                Q2 = np.asarray(st.get_edge(int(corner_ids[r, lo2]),
+                                            int(corner_ids[r, hi2])), float)
+                if len(Q2) != len(pts):
+                    continue
+                devs.append(Q2 - np.linspace(Q2[0], Q2[-1], len(Q2)))
+        if not devs:
+            continue
+        D = np.mean(devs, axis=0)
+        r, ax, li, lj = occ[key][0]
+        lo, hi = canon(r, li, lj, ax)
+        a0 = int(corner_ids[r, lo])
+        p0, p1 = C_snap[r, lo], C_snap[r, hi]
+        new = np.linspace(p0, p1, len(pts)) + D
+        new[0], new[-1] = p0, p1
+        st.edge_pts[key] = new if a0 == key[0] else new[::-1]
+        st.edge_curve[key] = BLEND_ID_BASE + done
+        done += 1
+    if stats is not None:
+        stats["edges_blended"] = stats.get("edges_blended", 0) + done
+    return done

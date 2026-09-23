@@ -163,10 +163,14 @@ class CurvedStructure:
 
 def build_structures(fm, corner_ids: np.ndarray, C_snap: np.ndarray,
                      blocks: np.ndarray, counts: list[int],
-                     cof: dict, path_fn=None) -> CurvedStructure:
+                     cof: dict, path_fn=None,
+                     edge_post_fn=None) -> CurvedStructure:
     """Kurven fuer jede Blockkante + kanonische Coons-Flaechengitter.
 
-    `path_fn` is forwarded to sample_on_curve (seam-graph fallback)."""
+    `path_fn` is forwarded to sample_on_curve (seam-graph fallback).
+    `edge_post_fn(st, corner_ids, C_snap, blocks)` runs after all edges are
+    sampled and BEFORE the Coons faces are built, so an edge rewritten there
+    still propagates into the faces."""
     st = CurvedStructure()
     for r in range(len(blocks)):
         st.dims[int(r)] = tuple(int(counts[cof[(int(r), ax)]]) for ax in (0, 1, 2))
@@ -186,6 +190,8 @@ def build_structures(fm, corner_ids: np.ndarray, C_snap: np.ndarray,
             st.edge_curve[key] = cid
             st.edge_dir[key] = int(cls)
             st.edge_len[key] = n
+    if edge_post_fn is not None:
+        edge_post_fn(st, corner_ids, C_snap, blocks)
     for r in range(len(blocks)):
         for axis in (0, 1, 2):
             for side in (0, 1):

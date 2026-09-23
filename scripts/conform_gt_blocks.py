@@ -39,7 +39,7 @@ Known pre-existing dataset artifact (scripts/map_generated_blocks.py:241-244):
 
 Usage:
   python scripts/conform_gt_blocks.py [--npz PATH] [--out-dir DIR]
-                                      [--surface-project]
+                                      [--geodesic] [--surface-project]
 """
 from __future__ import annotations
 
@@ -59,6 +59,8 @@ from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
 from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
+from patch_paths import (PatchPaths, blend_chord_edges,  # noqa: E402
+                         write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -291,6 +293,47 @@ def _surface_path_fn(fm: FeatureModelV2, stats: dict, max_pull: float = 0.15,
     return fn
 
 
+HEX_FACES = ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5),
+             (2, 3, 7, 6), (3, 0, 4, 7))
+
+
+def _boundary_edge_pred(fm, C_snap: np.ndarray):
+    """(p0, p1) -> True when the block edge lies on a DOMAIN BOUNDARY face.
+
+    A quad face shared by two blocks is interior; a face owned by exactly one
+    block bounds the domain.  Only the edges of those faces may be routed on
+    an npz patch -- interior edges run through the volume and must stay
+    chords, otherwise they get dragged onto a surface.
+    """
+    blocks = np.asarray(fm.blocks, np.int64)
+    key_of = {}
+    for r in range(blocks.shape[0]):
+        for c in range(8):
+            key_of[np.round(C_snap[r, c], 9).tobytes()] = int(blocks[r, c])
+    count: dict = {}
+    for row in blocks:
+        for f in HEX_FACES:
+            k = frozenset(int(row[i]) for i in f)
+            count[k] = count.get(k, 0) + 1
+    bnd_edges = set()
+    for row in blocks:
+        for f in HEX_FACES:
+            if count[frozenset(int(row[i]) for i in f)] != 1:
+                continue
+            for a, b in zip(f, f[1:] + f[:1]):
+                ia, ib = int(row[a]), int(row[b])
+                bnd_edges.add((ia, ib) if ia < ib else (ib, ia))
+
+    def pred(p0, p1) -> bool:
+        a = key_of.get(np.round(np.asarray(p0, float), 9).tobytes())
+        b = key_of.get(np.round(np.asarray(p1, float), 9).tobytes())
+        if a is None or b is None:
+            return False
+        return ((a, b) if a < b else (b, a)) in bnd_edges
+
+    return pred
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="conform GT coarse block structure onto npz geometry")
@@ -299,6 +342,17 @@ def main() -> int:
     ap.add_argument("--target-h", type=float, default=10.0,
                     help=">> max GT edge length => 1x1x1 lattice (coarse)")
     ap.add_argument("--feature-cache", default=os.path.join(ROOT, "data", "features"))
+    ap.add_argument("--geodesic", action="store_true",
+                    help="route non-seam block edges as shortest paths ON "
+                         "their associated npz patch (plan v4, D4). A patch "
+                         "path cannot cross the blade footprint, so edges run "
+                         "AROUND the blade; no arc/chord guard. Writes "
+                         "<prefix>_geodesic_edges.vtk + _routing.json")
+    ap.add_argument("--blend-interior", action="store_true",
+                    help="give interior chord edges a shape blended from the "
+                         "parallel rails of their direction class (plan v4). "
+                         "Boundary edges untouched -- their patch already "
+                         "determines them.")
     ap.add_argument("--surface-project", action="store_true",
                     help="project non-seam block edges lying on a single npz "
                          "patch onto that patch; edges crossing onto another "
@@ -331,16 +385,53 @@ def main() -> int:
     seam_fn = _seam_path_fn(seam, records, route_stats)
     surf_fn = (_surface_path_fn(fm, route_stats, records=records)
                if args.surface_project else None)
+    is_bnd = _boundary_edge_pred(fm, C_snap)
+    geo = (PatchPaths(fm, records=records, stats=route_stats,
+                      is_boundary=is_bnd)
+           if args.geodesic else None)
+    # One record per block edge, in build_structures creation order, so the
+    # debug VTK shows ALL 84 edges -- seam, geodesic and chord alike.
+    edge_log: list = []
 
     def path_fn(p0, p1, n):
+        p0a, p1a = np.asarray(p0, float), np.asarray(p1, float)
+        chord = float(np.linalg.norm(p1a - p0a))
         res = seam_fn(p0, p1, n)
         if res is not None:
+            pts = np.asarray(res[0], float)
+            arc = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+            edge_log.append({"pts": pts, "kind": 1, "label": -1,
+                             "arc_over_chord": arc / chord if chord else 0.0})
             return res
-        return surf_fn(p0, p1, n) if surf_fn is not None else None
+        if geo is not None:
+            res = geo(p0, p1, n)
+            if res is not None:
+                pts = np.asarray(res[0], float)
+                edge_log.append({"pts": pts, "kind": 2,
+                                 "label": int(geo.debug[-1]["chosen"]),
+                                 "arc_over_chord": float(
+                                     geo.debug[-1]["arc_over_chord"])})
+                return res
+            edge_log.append({"pts": np.linspace(p0a, p1a, n), "kind": 0,
+                             "label": -1, "arc_over_chord": 1.0})
+            return None
+        res = surf_fn(p0, p1, n) if surf_fn is not None else None
+        pts = (np.asarray(res[0], float) if res is not None
+               else np.linspace(p0a, p1a, n))
+        arc = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+        edge_log.append({"pts": pts, "kind": 3 if res is not None else 0,
+                         "label": -1,
+                         "arc_over_chord": arc / chord if chord else 0.0})
+        return res
+
+    def edge_post_fn(st, corner_ids, C_s, blks):
+        blend_chord_edges(st, corner_ids, C_s, blks, stats=route_stats)
 
     curved_path = prefix + "_refill.vtk"
     rep = refill_curved(C_snap, args.target_h, curved_path, fm=target,
-                        path_fn=path_fn)
+                        path_fn=path_fn,
+                        edge_post_fn=(edge_post_fn if args.blend_interior
+                                      else None))
 
     # Boundary conformity tripwire on the exported mesh.
     import export_vtk  # noqa: E402  (curved_bridge inserted the path)
@@ -348,7 +439,19 @@ def main() -> int:
     # rebuild via the same weld path is overkill; instead measure on the VTK.
     # Simplest: re-derive boundary points from rep is not possible -> parse VTK.
     pts_w, Hn = _read_vtk_mesh(curved_path)
-    max_bnd = _boundary_dist(fm, pts_w, Hn)
+    bids = rep.pop("boundary_point_ids", None)
+    if bids is not None and len(bids):
+        # Boundary from the block topology (robust where cells fold), not from
+        # the fine mesh facet count.
+        d, _, _ = fm.surface_nearest(pts_w[bids], k=32)
+        max_bnd = float(np.max(d))
+        bnd_stats = {"n": int(len(bids)), "max": max_bnd,
+                     "mean": float(np.mean(d)),
+                     "p50": float(np.percentile(d, 50)),
+                     "p99": float(np.percentile(d, 99))}
+    else:
+        max_bnd = _boundary_dist(fm, pts_w, Hn)
+        bnd_stats = {"max": max_bnd}
 
     compare_path = prefix + "_compare.vtk"
     gt_blocks = [[int(j) for j in b] for b in fm.blocks]
@@ -358,6 +461,23 @@ def main() -> int:
                      [(fm.vertices, gt_blocks, 1, 12),
                       (snapped_v, gt_blocks, 2, 12)],
                      f"meshtron {stem} GT conform (1=GT corners, 2=snapped)")
+
+    if edge_log:
+        # Debug artifact: EVERY block edge, so nothing looks "missing".
+        # route_kind 0=chord (interior edge), 1=seam curve, 2=geodesic on a
+        # patch, 3=legacy surface projection.  patch_label is -1 unless the
+        # edge was routed geodesically.
+        write_debug_vtk(prefix + "_edges_debug.vtk",
+                        [e["pts"] for e in edge_log],
+                        {"route_kind": [e["kind"] for e in edge_log],
+                         "patch_label": [e["label"] for e in edge_log],
+                         "arc_over_chord": [e["arc_over_chord"]
+                                            for e in edge_log]},
+                        f"meshtron {stem} block edge routing "
+                        f"(route_kind 0=chord 1=seam 2=geodesic 3=surfproj)")
+    if geo is not None:
+        with open(prefix + "_routing.json", "w") as fh:
+            json.dump(geo.debug, fh, indent=2)
 
     snap_moves = np.linalg.norm(C_snap.reshape(-1, 3) - C.reshape(-1, 3), axis=1)
     summary = {
@@ -373,7 +493,22 @@ def main() -> int:
         "multi_patch_walk": {
             "enabled": bool(args.surface_project),
             "edges": int(route_stats["edges_walked_multi_patch"])},
+        "blend_interior": {
+            "enabled": bool(args.blend_interior),
+            "edges": int(route_stats.get("edges_blended", 0))},
+        "geodesic": {
+            "enabled": bool(args.geodesic),
+            "edges": int(route_stats.get("edges_geodesic", 0)),
+            "failed": int(sum(1 for d in (geo.debug if geo else [])
+                              if d["chosen"] is None)),
+            "max_arc_over_chord": float(max(
+                [d["arc_over_chord"] for d in (geo.debug if geo else [])
+                 if d.get("arc_over_chord") is not None], default=0.0)),
+            "max_dist_patch": float(max(
+                [d["max_dist_patch"] for d in (geo.debug if geo else [])
+                 if d.get("max_dist_patch") is not None], default=0.0))},
         "refill": rep,
+        "boundary": bnd_stats,
         "tripwires": {
             "max_boundary_surface_dist": max_bnd,
             "tolerance": BOUNDARY_TOL,
@@ -392,7 +527,9 @@ def main() -> int:
     print(f"blocks={nb} snap_max_move={snap_moves.max():.6f} "
           f"tiers={summary['snap']['tier_counts']} routes={route_stats['routes']} "
           f"surface_projected={route_stats['edges_surface_projected']} "
-          f"walked_multi_patch={route_stats['edges_walked_multi_patch']}")
+          f"walked_multi_patch={route_stats['edges_walked_multi_patch']} "
+          f"geodesic={route_stats.get('edges_geodesic', 0)} "
+          f"blended={route_stats.get('edges_blended', 0)}")
     print(f"refill: watertight={rep['watertight']} cells={rep['cells_after']} "
           f"inverted={rep['inverted_curved']} (known GT dataset artifact) "
           f"buckets={rep.get('buckets')}")

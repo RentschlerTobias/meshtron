@@ -292,6 +292,9 @@ def main():
     ap.add_argument("--wd", type=float, default=0.042)
     ap.add_argument("--warmup", type=int, default=600)
     ap.add_argument("--val-every", type=int, default=1)
+    ap.add_argument("--save-start", type=int, default=20,
+                    help="erste Epoche (1-basiert), ab der bei neuem Best-VAL "
+                         "ein Checkpoint geschrieben wird; davor nie speichern")
     ap.add_argument("--out", default="data/hexarow_full_model.pt")
     ap.add_argument("--ckpt", default="data/hexarow_full_model_ckpt.pt",
                     help="per-Epoch-Checkpoint (model+opt) fuer Resume")
@@ -400,14 +403,16 @@ def main():
 
     start_ep = 0
     start_step = 0
+    best_val = float("inf")
     if args.resume:
         ck = torch.load(args.resume, weights_only=False)
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])
         start_ep = ck["epoch"] + 1
         start_step = ck["step"]
+        best_val = ck.get("best_val", float("inf"))
         step = start_step
-        print(f"resume: epoch {start_ep}, step {step}")
+        print(f"resume: epoch {start_ep}, step {step} (best-val {best_val:.4f})")
 
     if dev == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -456,12 +461,16 @@ def main():
                               dev, lossf, dtype, args.w_unit_end, SPECIALS,
                               npt=npt)
             msg += f"  VAL loss {vl:.3f} tok-acc {va:.3f}"
+            # Checkpoint nur bei neuem Best-VAL und erst ab save-start:
+            # torch.save von Model+Opt pro Epoche kostet sonst deutlich Zeit.
+            if ep + 1 >= args.save_start and vl < best_val:
+                best_val = vl
+                torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
+                            "epoch": ep, "step": step, "best_val": best_val,
+                            "r_bounds": rb, "z_bounds": zb,
+                            "coords": coords, "npt": npt}, args.ckpt)
+                msg += f"  checkpoint -> {args.ckpt} (best-val {best_val:.3f})"
         print(msg + f"  ({time.time() - t0:.0f}s)")
-        torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
-                    "epoch": ep, "step": step,
-                    "r_bounds": rb, "z_bounds": zb,
-                    "coords": coords, "npt": npt}, args.ckpt)
-        print(f"  checkpoint -> {args.ckpt}")
 
     out_cfg = dict(vars(args))
     out_cfg["npt"] = npt

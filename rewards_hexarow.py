@@ -1,23 +1,47 @@
-"""rewards_hexarow.py — GRPO-Belohnungen fuer HexaRow (P2-1).
+"""rewards_hexarow.py — dense GRPO reward for HexaRow (P2-1).
 
-Factory-Stil wie rewards.py (Closure + Config-Dataclass). Drei Terme, alle
-CONFIG-gesteuert:
+Factory style like rewards.py (closure + config dataclass). The reward is now
+DENSE on the current policy instead of all-or-nothing: a rollout that fails the
+strict ``validate_generated_mesh`` gate (e.g. 56 blocks vs 60 expected, or a few
+inverted cells) still receives a partial gradient, because full validity had
+``valid_rate = 0.000`` on the RL start checkpoint and therefore produced
+``advantage = 0`` for every group.
 
-  r_valid   binär: gestoppt UND detokenisierbar ohne Trim UND
-            validate_generated_mesh (inkl. expected_blocks) -> 1.0 sonst 0.0.
-  r_quality mean hex_min_jacobian ueber Zellen mit GT-kompatibler Orientierung
-            (signed volume > 0) MINUS lambda * mean(max(0, -detJ_cell)); 0 wenn
-            invalid. Bestraft also isolierte gefaltete Zellen direkt.
-  r_conform symmetrischer Chamfer(gen-Verts, GT-surface_points), Blade-Punkte
-            der GT-Seite x blade_factor gewichtet, bbox-diagonal-normiert,
-            als Reward 1 - min(1, d/scale); 0 wenn invalid.
+Hard-invalid only for garbage (all terms exactly 0.0, ``valid=False``):
+  * empty sequence, or last token != stop_token;
+  * no sep_token anywhere (not a row-grammar program — e.g. random tokens);
+  * detokenize_safe returns ``res is None`` (no valid row reconstructible);
+  * non-finite Cartesian vertices.
+A trailing incomplete row (``trim is not None``) is NOT invalid: it only takes
+the mild ``w_trim`` penalty.
 
-total = w_valid*r_valid + w_quality*r_quality + w_conform*r_conform.
+Dense terms (computed ALWAYS, not behind ``val.valid``):
 
-KEIN Vertex-/Token-Reward: die Grammatik ist durch slot_mask-constrained Decoding
-bereits garantiert (rewards.py-Vertexreward waere hier vakuum). Das Fehlerprofil
-der SFT-Rollouts (reports/sft_family_eval.md) sind isolierte gefaltete Zellen /
-Dup-Artifakte — genau was r_quality adressiert.
+  r_count   max(0, 1 - |gen_blocks - gt_blocks| / max(1, gt_blocks)); replaces
+            the binary block-count check.
+  r_quality mean(hex_min_jacobian over cells with signed volume > 0) MINUS
+            lam_fold * mean(max(0, -minJ)); if no cell has positive signed
+            volume, base is 0.0 and an extra penalty_all_folded is subtracted.
+            Directly punishes isolated folded / inverted cells.
+  r_conform symmetric Chamfer(gen verts, GT surface_points), GT blade points
+            weighted by blade_factor, bbox-diagonal-normalised, as
+            1 - min(1, d / (conform_scale * diag)); only if the item carries
+            surface_points.
+
+Validity bonus: ``valid``/``r_valid`` keep the strict validate_generated_mesh
+semantics (the ``r_valid_share`` CSV column uses them); when valid, the full
+``w_full_valid`` bonus is added to ``total``.
+
+  total = w_count*r_count + w_quality*r_quality + w_conform*r_conform
+          + w_full_valid*(1 if valid else 0) - w_trim*(1 if trim else 0)
+
+``w_valid`` is retained only for positional-config backwards compatibility and
+is UNUSED (folded into ``w_full_valid``).
+
+NO vertex/token reward: the grammar is already guaranteed by slot_mask
+constrained decoding (rewards.py's vertex reward would be vacuous here). The
+SFT rollout failure profile (reports/sft_family_eval.md) is isolated folded
+cells / dup artefacts — exactly what r_quality addresses.
 """
 from __future__ import annotations
 
@@ -31,12 +55,18 @@ from mesh_validation import hex_min_jacobian, hex_signed_volumes, validate_gener
 
 @dataclass(frozen=True, slots=True)
 class HexaRowRewardConfig:
-    w_valid: float = 1.0
+    # Legacy fields kept (same order) so positional construction still works.
+    w_valid: float = 1.0          # deprecated: unused, folded into w_full_valid
     w_quality: float = 0.5
     w_conform: float = 0.1
     lam_fold: float = 1.0
     blade_factor: float = 2.0
     conform_scale: float = 1.0
+    # Dense-scheme fields.
+    w_count: float = 0.5
+    w_full_valid: float = 1.0
+    w_trim: float = 0.25
+    penalty_all_folded: float = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +81,11 @@ class RewardTerms:
 _INVALID = RewardTerms(0.0, 0.0, 0.0, 0.0, False)
 
 
+def block_count_reward(gen_blocks: int, gt_blocks: int) -> float:
+    """Dense block-count term: max(0, 1 - |gen - gt| / max(1, gt))."""
+    return max(0.0, 1.0 - abs(int(gen_blocks) - int(gt_blocks)) / max(1, int(gt_blocks)))
+
+
 def _to_cartesian(vpt, coords: str) -> np.ndarray:
     v = np.asarray(vpt, dtype=np.float64)
     if coords == "cart":
@@ -60,7 +95,7 @@ def _to_cartesian(vpt, coords: str) -> np.ndarray:
 
 
 def _nn_distances(a: np.ndarray, b: np.ndarray, chunk: int = 256) -> np.ndarray:
-    """Fuer jeden Punkt in a: min. euklidischer Abstand zu b (float32, chunked)."""
+    """For each point in a: min. Euclidean distance to b (float32, chunked)."""
     a = np.asarray(a, dtype=np.float32)
     b = np.asarray(b, dtype=np.float32)
     out = np.empty(a.shape[0], dtype=np.float32)
@@ -73,7 +108,7 @@ def _nn_distances(a: np.ndarray, b: np.ndarray, chunk: int = 256) -> np.ndarray:
 
 def chamfer_symmetric(gen: np.ndarray, gt: np.ndarray,
                       weights: np.ndarray | None = None) -> float:
-    """Symmetrischer Chamfer; weights gewichten die GT->gen-Richtung."""
+    """Symmetric Chamfer; weights weight the GT->gen direction."""
     if len(gen) == 0 or len(gt) == 0:
         return float("inf")
     d_ab = _nn_distances(gen, gt)
@@ -86,27 +121,45 @@ def chamfer_symmetric(gen: np.ndarray, gt: np.ndarray,
 
 def _score(token_ids: list, item: dict, tokenizer, cfg: HexaRowRewardConfig,
            coords: str, stop_id: int) -> RewardTerms:
+    # --- hard-invalid garbage ------------------------------------------------
     if not token_ids or token_ids[-1] != stop_id:
         return _INVALID
+    # A legitimate row-grammar program always emits sep_token at a row boundary;
+    # a stop-terminated stream without any SEP (e.g. 300 random coordinate
+    # tokens) is garbage -> exactly 0.0 / invalid.
+    if tokenizer.core.sep_token not in token_ids[:-1]:
+        return _INVALID
     res, trim = detokenize_safe(list(token_ids), tokenizer, stop_id, coords=coords)
-    if res is None or trim is not None:
+    if res is None:
         return _INVALID
     vpt, blk = res
     vcart = _to_cartesian(vpt.numpy(), coords)
-    blocks = blk.numpy()
-    val = validate_generated_mesh(vcart, blocks,
-                                  expected_blocks=int(item["blocks"]))
-    if not val.valid:
+    if not np.isfinite(vcart).all():
         return _INVALID
+    blocks = blk.numpy()
+    trim_pen = 1.0 if trim is not None else 0.0
 
-    cells = vcart[blocks]
-    jac = hex_min_jacobian(cells)
-    vol = hex_signed_volumes(cells)
-    oriented = jac[vol > 0.0]
+    # --- dense block-count term ---------------------------------------------
+    gt_blocks = max(1, int(item["blocks"]))
+    gen_blocks = int(blocks.shape[0])
+    r_count = block_count_reward(gen_blocks, gt_blocks)
+
+    # --- dense quality term (always) ----------------------------------------
+    if blocks.size:
+        cells = vcart[blocks]
+        jac = hex_min_jacobian(cells)
+        vol = hex_signed_volumes(cells)
+        oriented = jac[vol > 0.0]
+        fold = float(np.maximum(0.0, -jac).mean())
+    else:
+        oriented = np.empty(0, dtype=np.float64)
+        fold = 0.0
     base = float(oriented.mean()) if oriented.size else 0.0
-    fold = float(np.maximum(0.0, -jac).mean())
     r_quality = base - cfg.lam_fold * fold
+    if oriented.size == 0:
+        r_quality -= cfg.penalty_all_folded
 
+    # --- dense conform term (always, same chamfer path) ---------------------
     r_conform = 0.0
     gt_pts = item.get("surface_points")
     if gt_pts is not None:
@@ -124,14 +177,21 @@ def _score(token_ids: list, item: dict, tokenizer, cfg: HexaRowRewardConfig,
         if diag > 1e-12:
             r_conform = max(0.0, 1.0 - min(1.0, d / (cfg.conform_scale * diag)))
 
-    total = (cfg.w_valid * 1.0 + cfg.w_quality * r_quality
-             + cfg.w_conform * r_conform)
-    return RewardTerms(1.0, r_quality, r_conform, float(total), True)
+    # --- validity bonus (kept strict semantics for the CSV) -----------------
+    val = validate_generated_mesh(vcart, blocks,
+                                  expected_blocks=int(item["blocks"]))
+    valid = bool(val.valid)
+    r_valid = 1.0 if valid else 0.0
+
+    total = (cfg.w_count * r_count + cfg.w_quality * r_quality
+             + cfg.w_conform * r_conform + cfg.w_full_valid * r_valid
+             - cfg.w_trim * trim_pen)
+    return RewardTerms(r_valid, r_quality, r_conform, float(total), valid)
 
 
 def make_hexarow_reward(tokenizer, config: HexaRowRewardConfig | None = None,
                         coords: str = "cart", stop_id: int | None = None):
-    """Factory wie rewards.py: gibt reward_fn(token_ids, item) -> RewardTerms."""
+    """Factory like rewards.py: returns reward_fn(token_ids, item) -> RewardTerms."""
     cfg = config or HexaRowRewardConfig()
     sid = tokenizer.core.stop_token if stop_id is None else int(stop_id)
 

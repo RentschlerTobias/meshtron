@@ -59,8 +59,8 @@ from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
 from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
-from patch_paths import (PatchPaths, blend_chord_edges,  # noqa: E402
-                         write_debug_vtk)
+from patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
+                         blend_chord_edges, write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -351,6 +351,10 @@ def main() -> int:
                          "path cannot cross the blade footprint, so edges run "
                          "AROUND the blade; no arc/chord guard. Writes "
                          "<prefix>_geodesic_edges.vtk + _routing.json")
+    ap.add_argument("--blade-clearance", type=float, default=0.0,
+                    help="keep geodesic edges this far away from the blade "
+                         "patch (label 7). 0 = plain shortest path, which "
+                         "hugs the blade root exactly as the GT edges do.")
     ap.add_argument("--blend-interior", action="store_true",
                     help="give interior chord edges a shape blended from the "
                          "parallel rails of their direction class (plan v4). "
@@ -390,7 +394,7 @@ def main() -> int:
                if args.surface_project else None)
     is_bnd = _boundary_edge_pred(fm.blocks, C_snap)
     geo = (PatchPaths(fm, records=records, stats=route_stats,
-                      is_boundary=is_bnd)
+                      is_boundary=is_bnd, clearance=args.blade_clearance)
            if args.geodesic else None)
     # One record per block edge, in build_structures creation order, so the
     # debug VTK shows ALL 84 edges -- seam, geodesic and chord alike.
@@ -427,14 +431,19 @@ def main() -> int:
                          "arc_over_chord": arc / chord if chord else 0.0})
         return res
 
+    # edge_post_fn also hands us the finished CurvedStructure, so the debug
+    # VTK can be written from the FINAL edges (path_fn alone runs before the
+    # blend and would show the pre-blend chords).
+    final_st: list = []
+
     def edge_post_fn(st, corner_ids, C_s, blks):
-        blend_chord_edges(st, corner_ids, C_s, blks, stats=route_stats)
+        final_st.append(st)
+        if args.blend_interior:
+            blend_chord_edges(st, corner_ids, C_s, blks, stats=route_stats)
 
     curved_path = prefix + "_refill.vtk"
     rep = refill_curved(C_snap, args.target_h, curved_path, fm=target,
-                        path_fn=path_fn,
-                        edge_post_fn=(edge_post_fn if args.blend_interior
-                                      else None))
+                        path_fn=path_fn, edge_post_fn=edge_post_fn)
 
     # Boundary conformity tripwire on the exported mesh.
     import export_vtk  # noqa: E402  (curved_bridge inserted the path)
@@ -465,19 +474,33 @@ def main() -> int:
                       (snapped_v, gt_blocks, 2, 12)],
                      f"meshtron {stem} GT conform (1=GT corners, 2=snapped)")
 
-    if edge_log:
-        # Debug artifact: EVERY block edge, so nothing looks "missing".
-        # route_kind 0=chord (interior edge), 1=seam curve, 2=geodesic on a
-        # patch, 3=legacy surface projection.  patch_label is -1 unless the
-        # edge was routed geodesically.
-        write_debug_vtk(prefix + "_edges_debug.vtk",
-                        [e["pts"] for e in edge_log],
-                        {"route_kind": [e["kind"] for e in edge_log],
-                         "patch_label": [e["label"] for e in edge_log],
-                         "arc_over_chord": [e["arc_over_chord"]
-                                            for e in edge_log]},
-                        f"meshtron {stem} block edge routing "
-                        f"(route_kind 0=chord 1=seam 2=geodesic 3=surfproj)")
+    if edge_log and final_st:
+        # Debug artifact: EVERY block edge in its FINAL shape, so nothing
+        # looks "missing".  route_kind 0=chord (interior, untouched),
+        # 1=seam curve, 2=geodesic on a patch, 3=legacy surface projection,
+        # 4=interior chord reshaped by blend_chord_edges.  patch_label is -1
+        # unless the edge was routed geodesically.
+        st_fin = final_st[0]
+        keys = list(st_fin.edge_pts.keys())
+        polys, kinds, labels, aoc = [], [], [], []
+        for i, key in enumerate(keys):
+            Q = np.asarray(st_fin.edge_pts[key], float)
+            rec = edge_log[i] if i < len(edge_log) else {
+                "kind": 0, "label": -1, "arc_over_chord": 1.0}
+            kind = rec["kind"]
+            if int(st_fin.edge_curve.get(key, -1)) >= BLEND_ID_BASE:
+                kind = 4
+            chord = float(np.linalg.norm(Q[-1] - Q[0]))
+            arc = float(np.linalg.norm(np.diff(Q, axis=0), axis=1).sum())
+            polys.append(Q)
+            kinds.append(int(kind))
+            labels.append(int(rec["label"]))
+            aoc.append(arc / chord if chord > 0 else 0.0)
+        write_debug_vtk(prefix + "_edges_debug.vtk", polys,
+                        {"route_kind": kinds, "patch_label": labels,
+                         "arc_over_chord": aoc},
+                        f"meshtron {stem} block edge routing (route_kind "
+                        f"0=chord 1=seam 2=geodesic 3=surfproj 4=blended)")
     if geo is not None:
         with open(prefix + "_routing.json", "w") as fh:
             json.dump(geo.debug, fh, indent=2)
@@ -499,6 +522,14 @@ def main() -> int:
         "blend_interior": {
             "enabled": bool(args.blend_interior),
             "edges": int(route_stats.get("edges_blended", 0))},
+        # Edges routed ON the blade patch itself sit at distance 0 by
+        # definition; they are excluded from the clearance statistic.
+        "blade_clearance": {
+            "value": float(args.blade_clearance),
+            "min_median_off_blade_edges": float(min(
+                [d["blade_dist_med"] for d in (geo.debug if geo else [])
+                 if d.get("blade_dist_med") is not None
+                 and d.get("chosen") not in (7,)], default=-1.0))},
         "geodesic": {
             "enabled": bool(args.geodesic),
             "edges": int(route_stats.get("edges_geodesic", 0)),

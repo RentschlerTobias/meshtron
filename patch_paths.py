@@ -50,6 +50,26 @@ def _closest_point_on_tris():
 class Patch:
     """One npz label patch: its triangles, its vertex graph, its projection."""
 
+    def set_clearance(self, dist_to_obstacle: np.ndarray, clearance: float,
+                      alpha: float = 8.0) -> None:
+        """Re-weight the graph so shortest paths keep away from an obstacle.
+
+        `dist_to_obstacle` is one distance per patch vertex.  An edge costs its
+        length times 1 + alpha*(1 - d/clearance)^2 while it is closer than
+        `clearance`, so a path bows away from the blade instead of hugging it,
+        yet stays the plain shortest path wherever the blade is far.
+        """
+        if clearance <= 0:
+            return
+        d = np.asarray(dist_to_obstacle, float)
+        m = 1.0 + alpha * np.clip(1.0 - d / clearance, 0.0, 1.0) ** 2
+        g = self.graph.tocoo()
+        w = g.data * 0.5 * (m[g.row] + m[g.col])
+        self.graph = coo_matrix((w, (g.row, g.col)),
+                                shape=self.graph.shape).tocsr()
+        self.clearance_d = d
+        self.clearance = float(clearance)
+
     def __init__(self, points: np.ndarray, tris: np.ndarray, label: int):
         self.label = int(label)
         self.tris = np.asarray(tris, np.int64)
@@ -75,6 +95,8 @@ class Patch:
         self.vtree = cKDTree(self.pts)
         self.ttree = cKDTree(self.pts[loc].mean(axis=1))
         self._cpt = _closest_point_on_tris()
+        self.clearance = 0.0
+        self.clearance_d = None
 
     # -- projection -------------------------------------------------------
     def project(self, q: np.ndarray, k: int = 16):
@@ -139,7 +161,9 @@ class PatchPaths:
     """path_fn(p0, p1, n) -> (points, curve_id) | None, geodesic on a patch."""
 
     def __init__(self, fm, records: list | None = None, smooth_iters: int = 300,
-                 stats: dict | None = None, is_boundary=None):
+                 stats: dict | None = None, is_boundary=None,
+                 clearance: float = 0.0, obstacle_labels=(7,),
+                 clearance_alpha: float = 8.0):
         self.fm = fm
         self.seam = fm.seam_curves
         self.stats = stats if stats is not None else {}
@@ -156,10 +180,63 @@ class PatchPaths:
             sel = fm.surface_tri_label == lab
             self.patches[int(lab)] = Patch(fm.surface_points,
                                            fm.surface_tris[sel], int(lab))
+        self.clearance = float(clearance)
+        self.obstacle = None
+        if self.clearance > 0:
+            sel = np.isin(fm.surface_tri_label, list(obstacle_labels))
+            if sel.any():
+                otris = fm.surface_tris[sel]
+                self.obstacle = (fm.surface_points, otris,
+                                 cKDTree(fm.surface_points[otris].mean(axis=1)))
+                for lab, patch in self.patches.items():
+                    if lab in obstacle_labels:
+                        continue        # the obstacle patch itself: no bias
+                    patch.set_clearance(self.obstacle_dist(patch.pts),
+                                        self.clearance, clearance_alpha)
         self.rec: dict = {}
         for r in (records or []):
             key = np.round(np.asarray(r["target"], float), 12).tobytes()
             self.rec[key] = r
+
+    def obstacle_dist(self, Q: np.ndarray, k: int = 24, with_point=False):
+        """Distance (and optionally closest point) to the obstacle (blade)."""
+        Q = np.asarray(Q, float).reshape(-1, 3)
+        if self.obstacle is None:
+            d = np.full(len(Q), np.inf)
+            return (d, Q.copy()) if with_point else d
+        P, tris, tree = self.obstacle
+        _, c = tree.query(Q, k=min(k, len(tris)))
+        c = np.atleast_2d(c)
+        tt = tris[c]
+        cpt = _closest_point_on_tris()
+        d2, pp = cpt(Q, P[tt[..., 0]], P[tt[..., 1]], P[tt[..., 2]])
+        best = np.argmin(d2, axis=1)
+        rows = np.arange(len(Q))
+        d = np.sqrt(d2[rows, best])
+        return (d, pp[rows, best]) if with_point else d
+
+    def _smooth_clear(self, patch, P: np.ndarray, iters: int) -> np.ndarray:
+        """Laplacian smoothing that keeps the blade clearance.
+
+        Plain smoothing minimises length and would pull the path straight back
+        onto the blade it was routed around, undoing the clearance weighting.
+        """
+        P = np.asarray(P, float).copy()
+        if len(P) < 3:
+            return P
+        for _ in range(iters):
+            mid = 0.5 * (P[:-2] + P[2:])
+            P[1:-1] = 0.5 * P[1:-1] + 0.5 * mid
+            _, P[1:-1] = patch.project(P[1:-1])
+            d, near = self.obstacle_dist(P[1:-1], with_point=True)
+            bad = d < self.clearance
+            if bad.any():
+                v = P[1:-1][bad] - near[bad]
+                nv = np.linalg.norm(v, axis=1, keepdims=True)
+                v = np.divide(v, np.where(nv > 1e-12, nv, 1.0))
+                P[1:-1][bad] += (self.clearance - d[bad])[:, None] * v
+                _, P[1:-1] = patch.project(P[1:-1])
+        return P
 
     # -- association ------------------------------------------------------
     def endpoint_labels(self, p: np.ndarray) -> set[int]:
@@ -208,7 +285,10 @@ class PatchPaths:
         P = np.vstack([p0[None], raw, p1[None]])
         P = resample(P, max(int(n), 40))
         P[0], P[-1] = p0, p1
-        P = patch.smooth(P, iters=self.smooth_iters)
+        if self.clearance > 0 and self.obstacle is not None and lab not in (7,):
+            P = self._smooth_clear(patch, P, self.smooth_iters)
+        else:
+            P = patch.smooth(P, iters=self.smooth_iters)
         P[0], P[-1] = p0, p1
         R = resample(P, n)
         # resample interpolates BETWEEN projected points, which lifts the
@@ -221,6 +301,10 @@ class PatchPaths:
                 "len": float(np.linalg.norm(np.diff(R, axis=0), axis=1).sum()),
                 "max_dist_patch": float(d.max()), "reason": None}
         info["arc_over_chord"] = info["len"] / chord if chord > 0 else np.inf
+        if self.obstacle is not None:
+            dob = self.obstacle_dist(R)
+            info["blade_dist_min"] = float(dob.min())
+            info["blade_dist_med"] = float(np.median(dob))
         return R, info
 
     def __call__(self, p0, p1, n):

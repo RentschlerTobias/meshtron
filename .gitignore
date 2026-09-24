@@ -22,7 +22,11 @@ scripts/__pycache__/
 # A `git add -A` during the package refactor swept 18424 data files, the .omo
 # session directory and ten HANDOFF notes into a commit; these rules make that
 # mistake impossible rather than merely discouraged.
-data/
+#
+# Anchored with a leading slash: an unanchored `data/` also matches
+# meshtron/data/, the source package, where it silently kept new modules out of
+# a commit that reported success.
+/data/
 .omo/
 HANDOFF*.md
 *.bak

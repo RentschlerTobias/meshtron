@@ -113,6 +113,80 @@ default to `naive` makes it fail with
 interrupted run held the weights and not the shape needed to use them. It now
 carries both, and phase 1 asserts the file loads rather than merely existing.
 
+## --epochs is the learning-rate schedule, not a stopping point
+
+A 600-epoch run on `hexarow_tokens_family_cart.pt` with the script's defaults
+overfits hard. Best validation came at epoch 104 (3.162) and then rose without
+recovering:
+
+    epoch 104   train acc 0.325   val loss 3.162   <- best
+    epoch 179   train acc 0.585   val loss 3.917
+    epoch 249   train acc 0.745   val loss 5.076
+
+That looked like it contradicted `hexarow_sft_cart_ep584.pt`, whose name says
+its best validation was at epoch 584 on the same token file. The configs
+explain it (`train_hexarow_full.py:364`):
+
+```python
+tot_steps = args.epochs * len(train_batches)
+lr = args.lr * 0.5 * (1 + cos(pi * step / tot_steps))
+```
+
+`--epochs` sets the length of the cosine, so shortening a run does not stop it
+early -- it compresses the whole decay into fewer steps:
+
+| | peak lr | at a comparable epoch | effective lr |
+|---|---|---|---|
+| reference, `--epochs 3000`, stopped at 584 | 3e-4 | 584 = 19.5% of the schedule | **2.7e-4** |
+| this run, `--epochs 600` | 1.3e-4 | 250 = 42% of the schedule | **8.1e-5** |
+
+A factor of 3.4 apart.
+
+**What this does and does not explain.** An earlier version of this note claimed
+the reference avoided overfitting because a sustained high learning rate
+regularises. That is not supported and the author of the reference run corrected
+it: that run was *also* overfitting by epoch 584. It was aborted there because
+584 was simply the last epoch that improved validation, and its checkpoint file
+confirms the account -- `hexarow_sft_cart_ep584.pt` carries no `epoch` or
+`best_val`, so it is not the best-val file the trainer writes but an `--out`
+format file someone had to reconstruct from it, which is the same gap fix 3
+above closes.
+
+So both runs overfit. The difference is *when*: the reference kept improving on
+validation until epoch 584, this run until epoch 104 -- 5.6x longer before the
+turn, at a learning rate 3.4x higher. That is a measured difference in
+configuration and in outcome. Calling the learning rate its cause was one
+hypothesis among several, and a run with the reference values settled it:
+
+    defaults   (lr 1.3e-4, dropout 0.17, wd 0.042)   best val 3.162 at epoch 104
+    reference  (lr 3e-4,   dropout 0.1,  wd 0.01)    best val 3.320 at epoch  49
+
+The reference recipe overfits **earlier** and to a worse optimum. The learning
+rate schedule is not the lever, and `ep584` is explained without it: that run
+used `--val-every 25`, so validation was sampled about 23 times across 584
+epochs, and a "new best" that late is a noise minimum inside a rising trend
+rather than real improvement.
+
+What is left is the data. `hexarow_tokens_family_cart.pt` holds 683 training
+samples but only **323 distinct geometries** -- an n2000 and an n8000 variant of
+each machine. 323 geometries against 40 M parameters overfits by construction,
+at epoch 50 to 105 whatever the schedule does.
+
+**The script's defaults do not reproduce the production checkpoint.** They are
+lr 1.3e-4, dropout 0.17, wd 0.042; `hexarow_sft_cart_ep584.pt` was trained with
+lr 3e-4, dropout 0.1, wd 0.01 and `--epochs 3000`. Anyone training a model here
+should copy the reference values, not the defaults, and treat `--epochs` as the
+schedule length -- to train for fewer epochs, keep the schedule long and stop
+the run, which the best-val checkpoint makes safe.
+
+## Which data
+
+`hexarow_tokens_family_cart.pt`: the coarse blockings, 683 train / 78 val,
+11-25 blocks per sample (median 21), median 371 tokens. NOT
+`hexarow_tokens_h05_family_cart.pt`, which is the fine variant at 36-188 blocks
+and median 1776 tokens. Both reference checkpoints used the coarse file, so the
+comparisons here are against models trained on the same data.
+
 ## Not addressed
 
 - **Inverted cells** are parked by explicit decision; current mapping results

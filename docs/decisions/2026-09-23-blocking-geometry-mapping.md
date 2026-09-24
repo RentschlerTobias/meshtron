@@ -251,3 +251,85 @@ machine_0291_n8000 25  machine_0034_n2000 12 (reference)
 
 Runtime budget: 4 s per sample at h=0.05 -> stratified set ~2 min, full batch ~45 min
 serial. Keeping only summary JSON for the batch avoids ~4 GB of VTK.
+
+## D3 correction (2026-09-24) — the corpus is not broken; the hull metric was
+
+The D3 amendment above claimed the folds are genuine. That generalised from
+`machine_0034_n2000` alone, which is the one sample where GT curvature does not help.
+Refilling with the GT's OWN `edge_polyline` at h=0.05:
+
+```
+sample               GT curvature   straight edges   our pipeline
+machine_0119_n2000              0             1425             2933
+machine_0387_n8000              0              550             1785
+machine_0252_n8000              2              435             3875
+machine_0050_n8000              1              118               21
+machine_0106_n2000              6              323             2532
+machine_0034_n2000              9                9               24
+```
+
+The GT blocks are curvilinear and valid with their own curvature. The trilinear scaled
+Jacobian of the 8-corner hull — the basis of the 86.3% figure — is the wrong test for them.
+
+**Corner ordering is correct**, cross-validated against the independent `edges` array: all
+12 edges implied by every block's VTK ordering are present, for all 12948 blocks in the
+692 samples, and zero inverted blocks can be made both edge-consistent and valid by any
+reordering of the top face. The entry/exit-face rotation defect known from the tokenizer is
+therefore not present in this npz data, as expected.
+
+**Consequence:** folded cells in a conform run are produced by OUR routing, not inherited
+from the dataset. The GT-curvature refill is the reference to beat. D3 stands as a decision
+(validity is reported, not gated) but its justification changes: the gate stays off because
+validity is a separate concern, not because the corpus is defective.
+
+Block thinness for context: shortest block edge p50 0.123, p5 0.031, and 12.3% of blocks
+are below 0.05 — at h=0.05 those get a single cell across. Inverted blocks are the thin
+ones (shortest edge p50 0.046 vs 0.134 for healthy).
+
+## D7 (2026-09-24) — the dataset carries block-level T-junctions
+
+Tobias spotted in ParaView that adjacent blocks do not share nodes and leave air
+between them. Three tests of mine had "ruled this out" and all three were circular:
+comparing shared faces never looks at single-owner faces; `quad_shell_faces` comes from
+the same exporter logic; boundary points sit on the surface because we project them there.
+The finding is real.
+
+**What happens.** A block face in the npz format is four corners. When two blocks touch
+across only PART of a side, that interface cannot be expressed, so both sides are recorded
+as domain boundary and the Coons reconstruction leaves a void between them. On
+`machine_0387_n8000` blocks 4/5 share 105 fine facets and blocks 4/20 share 75, with no
+common block face; the resulting slit is 0.046 wide, about one cell at h=0.05, and it is
+h-independent (0.046 at h=0.2, 0.1, 0.05 and 0.025 with a fixed search radius).
+
+**Where it enters.** Not in AlgoHex. `blocks.vtk` is a conforming hex mesh
+(facet multiplicity 2 and 1 only, no interior single-owner facets). The defect appears
+with the block abstraction, `tfi.lattices` -> 8 corners per block. Regenerating the data
+with AlgoHex would reproduce it, so installing AlgoHex for that purpose is not warranted.
+
+**Extent** (689 samples with `blocks.vtk`):
+
+```
+with block-level T-junctions          118  (17.1%)
+block-count classes affected          11, 15, 19, 21
+block-count classes with exactly none 12, 16, 22, 25
+```
+
+Cross-check against the geometric void detector: samples with a T-junction carry >= 6 void
+facet pairs (median 64, max 102), samples without carry <= 7 (median 2). A threshold of 11
+separates them perfectly. An earlier figure of "52% of the corpus" came from counting
+those 1-5 pair samples, which are detector noise.
+
+**Consequences.**
+- `refill_curved` treats every single-owner block face as domain boundary and projects it
+  onto the npz surface. On affected samples it therefore drags interior walls outward.
+  That is a defect in our code independent of the dataset, and part of the folded cells
+  previously attributed to the face projection.
+- Validity numbers from S3/S4 are meaningless on affected samples; conformity is not.
+- `scripts/detect_block_tjunctions.py` is the exact, geometry-free gate (no refill);
+  `scripts/detect_block_voids.py` is the geometric cross-check.
+
+**Options, ascending cost:** (1) gate the dataset and work with the 571 clean samples;
+(2) split blocks at T-junctions so every interface is a full block face — makes the complex
+conforming, changes block counts and therefore token sequences, needs retraining but no
+geometry regeneration; (3) extend the format with partial-face adjacency — complicates
+tokenizer, model and refill alike. Not recommended.

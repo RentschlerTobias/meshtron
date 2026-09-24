@@ -3,9 +3,8 @@ through the whole chain on a single machine.
 
 Stages, in the order they run:
 
-  01 tet mesh      the gmsh volume mesh, tets only
-  02 geometry      the labelled surface EXTRACTED FROM IT, which is what the
-                   rest of the chain treats as the geometry
+  01 geometry      the labelled surface every later stage works against
+  02 tet mesh      the gmsh volume mesh, tets only
   03 point cloud   what the transformer actually sees as conditioning
   04 algohex       AlgoHex's fine hex mesh, coloured by block
   05 block complex the coarse block structure the export keeps (GT)
@@ -14,10 +13,10 @@ Stages, in the order they run:
   08 post generated  the same for the generated blocks
 
 Stage 0 is the parametric definition (30 cV_ru values in params.json); it has no
-renderable form here, so the chain starts at the tet mesh. Note the direction:
-the npz surface is the tet mesh's boundary -- same 12539 nodes, and its 19516
-boundary facets are exactly the npz triangles -- so the surface comes AFTER the
-volume mesh, not before it.
+renderable form here. Stages 01 and 02 are two views of the same thing: the npz
+surface IS the tet mesh's boundary (same 12539 nodes, and its 19516 boundary
+facets are exactly the npz triangles), so the surface leads because it is what
+the rest of the chain works against.
 
 The gmsh file mixes dimensions (8 vertices, 530 lines, 19516 triangles and
 44337 tets, with a `color` tag per gmsh entity). ParaView then draws the
@@ -129,7 +128,18 @@ def main() -> int:
     z = np.load(npz, allow_pickle=True)
     made = []
 
-    # 01 tet mesh (tets only; the gmsh file also carries vertices, lines and
+    # 01 geometry surface
+    p = os.path.join(out, "01_geometry_surface.vtk")
+    _write_tris(p, np.asarray(z["surface_points"], float),
+                np.asarray(z["surface_tris"], np.int64),
+                np.asarray(z["surface_tri_label"], np.int64),
+                f"{name} stage 01 geometry: npz surface, scalar patch_label "
+                f"(1 inlet, 2 outlet, 3/4 periodic, 5 hub, 6 shroud, "
+                f"7 blade hull)")
+    made.append(("01_geometry_surface.vtk",
+                 "labelled geometry surface, scalar patch_label"))
+
+    # 02 tet mesh (tets only; the gmsh file also carries vertices, lines and
     # the boundary triangles, which ParaView would draw on top)
     tet = os.path.join(BATCH, base, f"{base}_tet.vtk")
     if os.path.exists(tet):
@@ -148,8 +158,8 @@ def main() -> int:
         col = ([int(float(L[sc + 2 + k])) for k in range(ncl)]
                if sc is not None else [0] * ncl)
         keep = [k for k in range(ncl) if ctypes[k] == 10]
-        with open(os.path.join(out, "01_tet_mesh.vtk"), "w") as fh:
-            fh.write(f"# vtk DataFile Version 2.0\n{name} stage 01 gmsh tet "
+        with open(os.path.join(out, "02_tet_mesh.vtk"), "w") as fh:
+            fh.write(f"# vtk DataFile Version 2.0\n{name} stage 02 gmsh tet "
                      f"mesh ({len(keep)} tets, scalar color = gmsh entity "
                      f"tag)\nASCII\nDATASET UNSTRUCTURED_GRID\n")
             fh.write(f"POINTS {npts} double\n")
@@ -165,21 +175,10 @@ def main() -> int:
             fh.write("LOOKUP_TABLE default\n")
             for k in keep:
                 fh.write(f"{col[k]}\n")
-        made.append(("01_tet_mesh.vtk",
+        made.append(("02_tet_mesh.vtk",
                      f"gmsh tetrahedral volume mesh, tets only "
                      f"({len(keep)} tets)"))
 
-    # 02 geometry surface, extracted from the tet mesh boundary
-    p = os.path.join(out, "02_geometry_surface.vtk")
-    _write_tris(p, np.asarray(z["surface_points"], float),
-                np.asarray(z["surface_tris"], np.int64),
-                np.asarray(z["surface_tri_label"], np.int64),
-                f"{name} stage 02 geometry: npz surface, scalar patch_label "
-                f"(1 inlet, 2 outlet, 3/4 periodic, 5 hub, 6 shroud, "
-                f"7 blade hull)")
-    made.append(("02_geometry_surface.vtk",
-                 "labelled boundary surface of the tet mesh -- the geometry "
-                 "the rest of the chain works against"))
 
     # 03 conditioning point cloud
     md = args.map_dir or os.path.join(ROOT, "data", f"map_batch__{name}")
@@ -209,6 +208,7 @@ def main() -> int:
                  f"coarse block structure kept by the export ({len(B)} blocks)"))
 
     # 06 transformer blocks
+    gen_corners = None
     cmp_path = os.path.join(md, "compare.vtk")
     if os.path.exists(cmp_path):
         P, cells, part = _read_parts(cmp_path)
@@ -224,6 +224,7 @@ def main() -> int:
             made.append(("06_transformer_blocks.vtk",
                          f"block structure the transformer generated "
                          f"({len(gen)} blocks)"))
+            gen_corners = np.stack([P[np.asarray(c, int)] for c in gen])
 
     # 07 GT blocks conformed and refilled
     fm = FeatureModelV2(npz, cache_dir=os.path.join(ROOT, "data", "features"))
@@ -255,15 +256,39 @@ def main() -> int:
                  f"GT blocks conformed to the geometry and refilled "
                  f"({rep['cells_after']} cells, h={args.target_h})"))
 
-    # 08 generated blocks conformed
-    for cand in ("cfd_curved.vtk", "cfd_refill.vtk"):
-        src = os.path.join(md, cand)
-        if os.path.exists(src):
-            shutil.copyfile(src, os.path.join(
-                out, "08_postproc_generated_conformed.vtk"))
-            made.append(("08_postproc_generated_conformed.vtk",
-                         "generated blocks conformed and refilled"))
-            break
+    # 08 generated blocks through the SAME pipeline as stage 07. The
+    # map_batch directories hold cfd_curved.vtk from an older run, before the
+    # geodesic routing, the seam snap, the face projection and the resample
+    # fix -- copying it would show the generated path as a regression against
+    # stage 07 when in truth it is just out of date.
+    if os.path.exists(cmp_path) and gen_corners is not None:
+        import tfi as _tfi
+        Cg = np.asarray(gen_corners, float)
+        Pw, remap = _tfi.weld(Cg.reshape(-1, 3))
+        blocks_g = remap.reshape(len(Cg), 8)
+        Cg_snap, rec_g = snap_corners_v2(target, Cg, SnapConfigV2())
+        st_g = {"routes": 0}
+        raw_g = _seam_path_fn(fm.seam_curves, rec_g, st_g, tol=1e-9)
+
+        def seam_g(p0, p1, n):
+            r = raw_g(p0, p1, n)
+            return None if r is None else (
+                snap_seam_path(fm.seam_curves, fm, r[0]), r[1])
+
+        geo_g = PatchPaths(fm, records=rec_g, stats=st_g,
+                           is_boundary=_boundary_edge_pred(blocks_g, Cg_snap))
+
+        def path_g(p0, p1, n):
+            r = seam_g(p0, p1, n)
+            return r if r is not None else geo_g(p0, p1, n)
+
+        p8 = os.path.join(out, "08_postproc_generated_conformed.vtk")
+        rep8 = refill_curved(Cg_snap, args.target_h, p8, fm=target,
+                             path_fn=path_g, write_edges=False,
+                             face_project_fn=make_face_projector(geo_g, st_g))
+        made.append(("08_postproc_generated_conformed.vtk",
+                     f"generated blocks through the same pipeline as stage 07 "
+                     f"({rep8['cells_after']} cells, h={args.target_h})"))
 
     with open(os.path.join(out, "README.md"), "w") as fh:
         fh.write(f"# Pipeline stages, {name}\n\n")
@@ -271,13 +296,13 @@ def main() -> int:
                  "chain.\n\n")
         for f, d in made:
             fh.write(f"- `{f}` -- {d}\n")
-        fh.write("\nColouring: 01 by `color` (gmsh entity tag), 02 by "
-                 "`patch_label`, 04 to 07 by `block_id`.\n")
+        fh.write("\nColouring: 01 by `patch_label`, 02 by `color` (gmsh "
+                 "entity tag), 04 to 08 by `block_id`.\n")
         fh.write("\nStage 0 is the parametric definition (30 `cV_ru` values "
-                 "in params.json) and has no renderable form here. The surface "
-                 "in stage 02 is the boundary of the volume mesh in stage 01 "
-                 "-- same 12539 nodes, and its 19516 boundary facets are "
-                 "exactly the npz triangles.\n")
+                 "in params.json) and has no renderable form here. Stages 01 "
+                 "and 02 are two views of the same thing: the surface is the "
+                 "tet mesh's boundary, same 12539 nodes, and its 19516 "
+                 "boundary facets are exactly the npz triangles.\n")
     print(f"\nwrote {len(made)} stages to {out}/")
     for f, d in made:
         sz = os.path.getsize(os.path.join(out, f)) / 1e6

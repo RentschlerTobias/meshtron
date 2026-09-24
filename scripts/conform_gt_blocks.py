@@ -298,6 +298,27 @@ HEX_FACES = ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5),
              (2, 3, 7, 6), (3, 0, 4, 7))
 
 
+def collapsed_faces(blocks, C_snap: np.ndarray) -> int:
+    """Number of block faces with fewer than 4 distinct welded corners.
+
+    A collapsed face means a degenerate block (a prism or worse). refill_curved
+    cannot orient such a face and raises "keine D4-Orientierung". These are
+    exactly the 12 of 692 samples that scripts/clean_base_npz.py already drops
+    as degenerate (|signed volume| <= 1e-9), so they are not in the training
+    corpus either -- skipping them adds no new restriction.
+    """
+    import tfi as _tfi
+    blocks = np.asarray(blocks, np.int64)
+    _, remap = _tfi.weld(np.asarray(C_snap, float).reshape(-1, 3))
+    H = remap.reshape(blocks.shape[0], 8)
+    n = 0
+    for row in H:
+        for f in HEX_FACES:
+            if len({int(row[i]) for i in f}) < 4:
+                n += 1
+    return n
+
+
 def _boundary_edge_pred(blocks, C_snap: np.ndarray):
     """(p0, p1) -> True when the block edge lies on a DOMAIN BOUNDARY face.
 
@@ -352,6 +373,17 @@ def main() -> int:
                          "path cannot cross the blade footprint, so edges run "
                          "AROUND the blade; no arc/chord guard. Writes "
                          "<prefix>_geodesic_edges.vtk + _routing.json")
+    ap.add_argument("--allow-collapsed", action="store_true",
+                    help="attempt samples with collapsed block faces; they "
+                         "normally fail in refill_curved with "
+                         "'keine D4-Orientierung'.")
+    ap.add_argument("--seam-tol", type=float, default=1e-9,
+                    help="a corner without a seam record in the snap may only "
+                         "be routed along a seam when it lies this close to "
+                         "one. The legacy 0.12 fallback started the arc up to "
+                         "0.078 away from the block corner, which distorts the "
+                         "Coons boundary row; with the geodesic router those "
+                         "edges belong on a patch instead.")
     ap.add_argument("--project-faces", action="store_true",
                     help="pull the interior of every domain boundary face onto "
                          "its npz patch before Gordon-Hall (plan v4 S2). Coons "
@@ -393,13 +425,21 @@ def main() -> int:
     nb = int(C.shape[0])
 
     C_snap, records = snap_corners_v2(target, C, SnapConfigV2())
+    import curved_bridge  # noqa: F401  (inserts the hex3d path for tfi)
+    curved_bridge._load()
+    n_coll = collapsed_faces(fm.blocks, C_snap)
+    if n_coll and not args.allow_collapsed:
+        print(f"skip {stem}: {n_coll} collapsed block faces (degenerate block; "
+              f"clean_base_npz.py drops these samples too). "
+              f"Use --allow-collapsed to try anyway.", file=sys.stderr)
+        return 3
     tier = {}
     for rec in records:
         tier[rec["tier"]] = tier.get(rec["tier"], 0) + 1
 
     route_stats = {"routes": 0, "edges_surface_projected": 0,
                    "edges_walked_multi_patch": 0}
-    seam_fn = _seam_path_fn(seam, records, route_stats)
+    seam_fn = _seam_path_fn(seam, records, route_stats, tol=args.seam_tol)
     surf_fn = (_surface_path_fn(fm, route_stats, records=records)
                if args.surface_project else None)
     is_bnd = _boundary_edge_pred(fm.blocks, C_snap)

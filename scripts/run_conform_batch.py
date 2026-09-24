@@ -32,7 +32,8 @@ from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from patch_paths import (PatchPaths, blend_chord_edges,  # noqa: E402
                          make_face_projector, max_kink_deg)
-from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
+from scripts.conform_gt_blocks import (_boundary_edge_pred,  # noqa: E402
+                                        collapsed_faces)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 BATCH = os.path.join(ROOT, "data", "hex3d_algohex", "batch")
@@ -48,9 +49,14 @@ def run_one(name: str, args) -> dict:
     C = fm.vertices[fm.blocks].astype(np.float64)
     nb = int(C.shape[0])
     C_snap, records = snap_corners_v2(target, C, SnapConfigV2())
+    n_coll = collapsed_faces(fm.blocks, C_snap)
+    if n_coll:
+        return {"name": name, "blocks": nb, "skipped": True,
+                "reason": f"{n_coll} collapsed block faces (degenerate block)",
+                "gate_pass": None}
     stats = {"routes": 0, "edges_surface_projected": 0,
              "edges_walked_multi_patch": 0}
-    seam_fn = _seam_path_fn(fm.seam_curves, records, stats)
+    seam_fn = _seam_path_fn(fm.seam_curves, records, stats, tol=args.seam_tol)
     geo = PatchPaths(fm, records=records, stats=stats,
                      is_boundary=_boundary_edge_pred(fm.blocks, C_snap),
                      clearance=args.blade_clearance,
@@ -119,6 +125,7 @@ def main() -> int:
     ap.add_argument("--target-h", type=float, default=0.05)
     ap.add_argument("--blade-clearance", type=float, default=0.06)
     ap.add_argument("--clearance-chord-frac", type=float, default=0.25)
+    ap.add_argument("--seam-tol", type=float, default=1e-9)
     ap.add_argument("--project-faces", action="store_true", default=True)
     ap.add_argument("--keep-failing-vtk", action="store_true")
     ap.add_argument("--feature-cache",
@@ -141,13 +148,17 @@ def main() -> int:
     else:
         names = [s for s in args.samples.split(",") if s]
 
-    rows, failed = [], []
+    rows, failed, skipped = [], [], []
     for k, name in enumerate(names, 1):
         try:
             row = run_one(name, args)
         except Exception as exc:  # noqa: BLE001
             failed.append({"name": name, "error": f"{type(exc).__name__}: {exc}"})
             print(f"[{k}/{len(names)}] {name}: ERROR {type(exc).__name__}: {exc}")
+            continue
+        if row.get("skipped"):
+            skipped.append(row)
+            print(f"[{k}/{len(names)}] {name:24s} SKIP {row['reason']}")
             continue
         rows.append(row)
         print(f"[{k}/{len(names)}] {name:24s} blocks={row['blocks']:3d} "
@@ -157,9 +168,9 @@ def main() -> int:
 
     rows.sort(key=lambda r: -r["boundary_max"])
     summary = {
-        "n": len(rows), "failed": failed,
+        "n": len(rows), "failed": failed, "skipped": skipped,
         "gate_pass": int(sum(1 for r in rows if r["gate_pass"])),
-        "settings": {"target_h": args.target_h,
+        "settings": {"target_h": args.target_h, "seam_tol": args.seam_tol,
                      "blade_clearance": args.blade_clearance,
                      "clearance_chord_frac": args.clearance_chord_frac,
                      "project_faces": bool(args.project_faces),
@@ -170,7 +181,8 @@ def main() -> int:
     with open(path, "w") as fh:
         json.dump(summary, fh, indent=2)
     print(f"\nsaved {path}")
-    print(f"gate pass {summary['gate_pass']}/{len(rows)}, errors {len(failed)}")
+    print(f"gate pass {summary['gate_pass']}/{len(rows)}, "
+          f"skipped {len(skipped)}, errors {len(failed)}")
     return 0
 
 

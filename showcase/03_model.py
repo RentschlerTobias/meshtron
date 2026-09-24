@@ -12,7 +12,21 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Run as a file and __file__ gives the location. Paste a cell into a REPL and
+# the code is stdin, so there is no __file__ -- then locate showcase/ from the
+# working directory instead. Start the REPL in the repo root or in showcase/.
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    HERE = os.path.abspath("showcase" if os.path.isdir("showcase") else ".")
+
+if not os.path.isfile(os.path.join(HERE, "_common.py")):
+    raise RuntimeError(f"showcase/_common.py not found from {os.getcwd()!r} -- "
+                       "start the REPL in the meshtron repo root")
+
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
 import _common as C  # noqa: E402
 
 ck, cfg, coords, npt, rb, zb, model, max_len, _ = C.load_model()
@@ -34,6 +48,7 @@ C.head("[1] modules")
 for name, mod in model.named_children():
     n = sum(p.numel() for p in mod.parameters())
     print(f"   {name:10s} {type(mod).__name__:18s} {n / 1e6:7.2f} M")
+
 print()
 print("   head.weight is tok.weight:",
       model.head.weight is model.tok.weight)
@@ -59,6 +74,7 @@ with torch.no_grad():
     a = F.scaled_dot_product_attention(q, f, f)
     pooled = model.penc.proj(a).mean(1)
     cvec = model.condition(pc, fc)
+
 C.show("pc", pc, 0)
 C.show("per-point features", f, 0)
 C.show("latent queries", q, 0)
@@ -76,8 +92,10 @@ hooks = [b.register_forward_hook(lambda m, i, o: acts.append(o.detach()))
          for b in model.blocks]
 with torch.no_grad():
     logits = model(x, pc, fc)
+
 for h in hooks:
     h.remove()
+
 C.show("x", x, 0)
 C.show("logits", logits, 0)
 print()
@@ -106,6 +124,7 @@ x2 = x.clone()
 x2[0, -1] = (x2[0, -1] + 1) % ck["vocab"]
 with torch.no_grad():
     l2 = model(x2, pc, fc)
+
 d_last = (logits[0, -1] - l2[0, -1]).abs().max().item()
 d_prev = (logits[0, :-1] - l2[0, :-1]).abs().max().item()
 print(f"   changed the last token: last position moved {d_last:.4f}, "
@@ -140,6 +159,7 @@ C.head("[7] one sampling step")
 temperature = 0.9
 with torch.no_grad():
     lg = model(torch.tensor(seq)[None], pc, fc)[0, -1]
+
 m = slot_mask(tok, seq, len(seq), ck["vocab"], coords)
 raw_top = int(lg.argmax())
 lg = lg + m                      # additive: -inf kills the illegal ids

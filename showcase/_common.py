@@ -14,6 +14,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
 HEX3D = ("/home/t1dde/hydrostack_pipeline/stack/domain_partition_3D/"
          "experimentell/hex3d_algohex")
 if HEX3D not in sys.path:
@@ -145,3 +146,4 @@ def load_model(device="cpu"):
 def scaled_jacobians(P, H):
     import clean_blocks as cb
     return cb.scaled_jacobians(np.asarray(P, float), np.asarray(H, int))
+

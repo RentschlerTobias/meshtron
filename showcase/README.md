@@ -2,12 +2,46 @@
 
 Five scripts that take the repo apart in the order it actually runs. They are
 written as `# %%` cells so they can be sent line by line or cell by cell to a
-Python REPL from neovim (vim-slime, iron.nvim, …), or run straight through:
+Python REPL from neovim (iron.nvim, vim-slime, …), or run straight through:
 
 ```
 uv run python showcase/01_overview.py          # run it
 uv run python -i showcase/03_model.py          # run it and stay in the REPL
 ```
+
+## From neovim, cell by cell
+
+**Start the REPL in the repo root**, so the scripts can find `showcase/`:
+
+```
+cd /home/t1dde/hydrostack_pipeline/stack/meshtron
+uv run python            # or :IronRepl with python set to `uv run python`
+```
+
+Then send cell `[0]` first — it puts `showcase/` on the path and imports
+`_common as C`, which every later cell uses — and after that any cell, in
+order. Send whole cells, not fragments: a cell is the unit that leaves the
+REPL in a usable state.
+
+A REPL is not a file, and two differences matter:
+
+- **There is no `__file__`.** Pasted code is stdin, so `__file__` is undefined
+  and `os.path.dirname(os.path.abspath(__file__))` raises `NameError`. Cell
+  `[0]` catches that and locates `showcase/` from the working directory
+  instead; start the REPL somewhere else and it says so, naming the directory,
+  instead of failing later with `ModuleNotFoundError: No module named
+  '_common'`.
+- **A blank line closes an open block.** So a top-level `with`/`for`/`if` needs
+  a blank line after its body before the next dedented statement, and must
+  contain none inside it. The scripts are written that way, and
+
+  ```
+  uv run python scripts/check_showcase_repl.py
+  ```
+
+  checks it — run it after editing a showcase script. It walks every line
+  through the same buffer logic as `code.InteractiveConsole` without executing
+  anything, so it names the line a REPL would choke on.
 
 Every cell prints shapes, ranges and a few rows of whatever it produced, and
 the ones that make geometry write a VTK into `data/showcase/`.

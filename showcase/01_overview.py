@@ -1,12 +1,14 @@
 """01 -- the whole chain, high level.
 
-Eight steps from the parametric geometry to a CFD mesh, each one cell. Run a
-cell, look at the numbers, look at the VTK it wrote, move on. Nothing here is
-deep -- the later scripts open each box.
+Eight interactive steps from the parametric geometry to a CFD mesh.
+Run a cell, look at the numbers, the function under the hood, look at the VTK it wrote, move on.
 
-    nvim: send cell by cell to a python REPL (vim-slime, iron.nvim, ...)
-    plain: uv run python -i showcase/01_overview.py
+Nothing here is deep -- this is an high level overview
+
+This tutorial is design in and for nvim using an python repl (iron.nvim)
+You can can the whole plain file non interactive: uv run python -i showcase/01_overview.py
 """
+
 # %% [0] setup
 import os
 import sys
@@ -15,7 +17,21 @@ import types
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+# Run as a file and __file__ gives the location. Paste a cell into a REPL and
+# the code is stdin, so there is no __file__ -- then locate showcase/ from the
+# working directory instead. Start the REPL in the repo root or in showcase/.
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    HERE = os.path.abspath("showcase" if os.path.isdir("showcase") else ".")
+
+if not os.path.isfile(os.path.join(HERE, "_common.py")):
+    raise RuntimeError(f"showcase/_common.py not found from {os.getcwd()!r} -- "
+                       "start the REPL in the meshtron repo root")
+
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
 import _common as C  # noqa: E402
 
 C.head("meshtron pipeline, high level")
@@ -45,15 +61,20 @@ from meshtron.data import conditioning  # noqa: E402
 src = torch.load(C.SRC, weights_only=False)
 sample = next(s for s in src["samples"] if s["name"] == C.MACHINE)
 ck, cfg, coords, npt, rb, zb, model, max_len, _ = C.load_model()
-cloud = conditioning.build_cloud(sample, cfg["n_points"], rb, zb,
-                                 np.random.default_rng(0))
+cloud = conditioning.build_cloud(
+    sample, cfg["n_points"], rb, zb, np.random.default_rng(0)
+)
 cloud = cloud[0] if isinstance(cloud, tuple) else cloud
 
 C.head("[2] conditioning cloud")
 C.show("cloud", cloud, 3)
 print(f"   r bounds {rb}   z bounds {zb}   coords {coords}")
-C.write_points(os.path.join(C.OUT, "02_cloud.vtk"), cloud,
-               {"blade_flag": cloud[:, 3]}, "conditioning cloud")
+C.write_points(
+    os.path.join(C.OUT, "02_cloud.vtk"),
+    cloud,
+    {"blade_flag": cloud[:, 3]},
+    "conditioning cloud",
+)
 
 # %% [3] the ground-truth block structure
 # What AlgoHex produced and the export kept: corner coordinates plus one row of
@@ -64,19 +85,28 @@ B = np.asarray(z["blocks"], np.int64)
 C.show("vertices", V, 2)
 C.show("blocks", B, 2)
 print(f"   {len(B)} blocks over {len(V)} corners")
-C.write_hexes(os.path.join(C.OUT, "03_blocks_gt.vtk"), V, B,
-              {"block_id": np.arange(len(B))}, "GT block structure")
+C.write_hexes(
+    os.path.join(C.OUT, "03_blocks_gt.vtk"),
+    V,
+    B,
+    {"block_id": np.arange(len(B))},
+    "GT block structure",
+)
 
 # %% [4] the same structure as a token sequence
 # The tokenizer walks the blocks in a canonical order and emits quantised
 # coordinates. This is what the transformer is trained on.
 tokens = torch.load(C.TOKENS, weights_only=False)
-item = next((it for it in tokens["train"] + tokens["val"]
-             if it["name"] == C.MACHINE), tokens["train"][0])
+item = next(
+    (it for it in tokens["train"] + tokens["val"] if it["name"] == C.MACHINE),
+    tokens["train"][0],
+)
 
 C.head("[4] tokens")
-print(f"   sample {item['name']}, {item['blocks']} blocks, "
-      f"{len(item['tokens'])} tokens, vocab {tokens['vocab']}")
+print(
+    f"   sample {item['name']}, {item['blocks']} blocks, "
+    f"{len(item['tokens'])} tokens, vocab {tokens['vocab']}"
+)
 C.show("tokens[:24]", np.asarray(item["tokens"][:24]), 1)
 
 # %% [5] one forward pass
@@ -88,6 +118,7 @@ pc = torch.as_tensor(np.asarray(cloud), dtype=torch.float32)[None]
 fc = torch.tensor([float(item["blocks"])])
 with torch.no_grad():
     logits = model(x, pc, fc)
+
 C.show("x (tokens)", x, 1)
 C.show("pc (cloud)", pc, 0)
 C.show("logits", logits, 0)
@@ -115,9 +146,13 @@ if os.path.exists(cmp_path):
     rm = {v: i for i, v in enumerate(used)}
     Cgen = np.stack([P[np.asarray(c, int)] for c in gen])
     print(f"   {len(gen)} generated blocks against {len(B)} ground truth")
-    C.write_hexes(os.path.join(C.OUT, "06_blocks_generated.vtk"), P[used],
-                  [[rm[int(v)] for v in c] for c in gen],
-                  {"block_id": np.arange(len(gen))}, "generated blocking")
+    C.write_hexes(
+        os.path.join(C.OUT, "06_blocks_generated.vtk"),
+        P[used],
+        [[rm[int(v)] for v in c] for c in gen],
+        {"block_id": np.arange(len(gen))},
+        "generated blocking",
+    )
 else:
     Cgen = None
     print("   no generation artifacts for this machine")
@@ -128,33 +163,39 @@ else:
 from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
 from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
 from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
-from meshtron.geometry.patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
-                         snap_seam_path)
-from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
+from meshtron.geometry.patch_paths import (
+    PatchPaths,
+    make_face_projector,  # noqa: E402
+    snap_seam_path,
+)
+from meshtron.geometry.conform import _boundary_edge_pred  # noqa: E402
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 C.head("[7] mapping onto the geometry")
 fm = FeatureModelV2(npz, cache_dir=os.path.join(C.DATA, "features"))
-target = types.SimpleNamespace(curves=fm.seam_curves,
-                               surface_nearest=fm.surface_nearest)
+target = types.SimpleNamespace(
+    curves=fm.seam_curves, surface_nearest=fm.surface_nearest
+)
 corners = fm.vertices[fm.blocks].astype(float)
 snapped, records = snap_corners_v2(target, corners, SnapConfigV2())
 move = np.linalg.norm(snapped.reshape(-1, 3) - corners.reshape(-1, 3), axis=1)
 print(f"   snap moved corners by at most {move.max():.2e}")
 
-stats = {"routes": 0, "edges_surface_projected": 0,
-         "edges_walked_multi_patch": 0}
+stats = {"routes": 0, "edges_surface_projected": 0, "edges_walked_multi_patch": 0}
 raw = _seam_path_fn(fm.seam_curves, records, stats, tol=1e-9)
 
 
 def seam(p0, p1, n):
     r = raw(p0, p1, n)
-    return None if r is None else (snap_seam_path(fm.seam_curves, fm, r[0]),
-                                   r[1])
+    return None if r is None else (snap_seam_path(fm.seam_curves, fm, r[0]), r[1])
 
 
-geo = PatchPaths(fm, records=records, stats=stats,
-                 is_boundary=_boundary_edge_pred(fm.blocks, snapped))
+geo = PatchPaths(
+    fm,
+    records=records,
+    stats=stats,
+    is_boundary=_boundary_edge_pred(fm.blocks, snapped),
+)
 
 
 def path_fn(p0, p1, n):
@@ -163,11 +204,18 @@ def path_fn(p0, p1, n):
 
 
 mesh = os.path.join(C.OUT, "07_cfd_mesh.vtk")
-rep = refill_curved(snapped, 0.05, mesh, fm=target, path_fn=path_fn,
-                    write_edges=False,
-                    face_project_fn=make_face_projector(geo, stats))
-print(f"   seam-routed edges {stats['routes']}, "
-      f"geodesic {stats.get('edges_geodesic', 0)}")
+rep = refill_curved(
+    snapped,
+    0.05,
+    mesh,
+    fm=target,
+    path_fn=path_fn,
+    write_edges=False,
+    face_project_fn=make_face_projector(geo, stats),
+)
+print(
+    f"   seam-routed edges {stats['routes']}, geodesic {stats.get('edges_geodesic', 0)}"
+)
 print(f"   cells {rep['cells_after']}, watertight {rep['watertight']}")
 
 # %% [8] how good is it
@@ -177,6 +225,7 @@ C.head("[8] quality")
 P, H = None, None
 with open(mesh) as fh:
     L = fh.read().split("\n")
+
 i = next(k for k, l in enumerate(L) if l.startswith("POINTS"))
 n = int(L[i].split()[1])
 P = np.array([[float(v) for v in L[i + 1 + k].split()] for k in range(n)])
@@ -189,11 +238,18 @@ bids = rep["boundary_point_ids"]
 d, _, _ = fm.surface_nearest(P[bids], k=32)
 sj = C.scaled_jacobians(P, H)
 print(f"   boundary to geometry   max {d.max():.2e}   (gate 1e-3)")
-print(f"   inverted cells         {int((sj <= 0).sum())} of {len(H)} "
-      f"({100 * (sj <= 0).mean():.2f}%)   min scaled Jacobian {sj.min():.3f}")
-C.write_hexes(mesh, P, H, {"block_id": block_id,
-                           "scaled_jacobian": sj,
-                           "inverted": (sj <= 0).astype(int)},
-              "conformed CFD mesh (colour by inverted or scaled_jacobian)")
-print("\nthe folds sit in the first cell layer at the blade -- script 05 "
-      "takes that apart.")
+print(
+    f"   inverted cells         {int((sj <= 0).sum())} of {len(H)} "
+    f"({100 * (sj <= 0).mean():.2f}%)   min scaled Jacobian {sj.min():.3f}"
+)
+C.write_hexes(
+    mesh,
+    P,
+    H,
+    {"block_id": block_id, "scaled_jacobian": sj, "inverted": (sj <= 0).astype(int)},
+    "conformed CFD mesh (colour by inverted or scaled_jacobian)",
+)
+print(
+    "\nthe folds sit in the first cell layer at the blade -- script 05 "
+    "takes that apart."
+)

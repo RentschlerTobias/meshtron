@@ -215,10 +215,27 @@ def generate_3d():
 
 
 def grpo_3d():
+    """Check the entry point, not the import.
+
+    This used to import train_grpo and report success. That hid a broken
+    script: the module's ROOT pointed one directory too shallow after the
+    refactor, and importing it from scripts/ worked only because a script run
+    from scripts/ already has that directory on sys.path. Run as a subprocess
+    with a clean sys.path, it raised ModuleNotFoundError. Invoking it the way
+    a user does is the only version of this check that means anything.
+    """
+    import subprocess
     from meshtron.training import rewards_hexarow  # noqa: F401
-    from meshtron.training import train_grpo  # noqa: F401
     need(os.path.join(DATA, "hexarow_batch_model_100.pt"))
-    return "modules import, reward functions available (no step run here)"
+    p = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "meshtron", "training",
+                                      "train_grpo.py"), "--help"],
+        capture_output=True, text=True, cwd=ROOT)
+    if p.returncode != 0:
+        raise RuntimeError(f"train_grpo.py is not runnable: "
+                           f"{p.stderr.strip()[-300:]}")
+    return ("the entry point runs and reward functions import "
+            "(scripts/test_training_e2e.py runs real steps)")
 
 
 def train_step_2d(dim):

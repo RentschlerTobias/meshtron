@@ -11,7 +11,21 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Run as a file and __file__ gives the location. Paste a cell into a REPL and
+# the code is stdin, so there is no __file__ -- then locate showcase/ from the
+# working directory instead. Start the REPL in the repo root or in showcase/.
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    HERE = os.path.abspath("showcase" if os.path.isdir("showcase") else ".")
+
+if not os.path.isfile(os.path.join(HERE, "_common.py")):
+    raise RuntimeError(f"showcase/_common.py not found from {os.getcwd()!r} -- "
+                       "start the REPL in the meshtron repo root")
+
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
 import _common as C  # noqa: E402
 
 npz_path = os.path.join(C.BATCH, C.MACHINE, "sample.npz")

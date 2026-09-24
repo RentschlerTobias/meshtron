@@ -1,5 +1,9 @@
 """train_grpo.py — GRPO-Spike auf der SFT-Cart-Policy (P2-2).
 
+KL anchor: the k3 estimator by default (see --kl-estimator; the plain
+log-ratio mean this file started with is not a divergence and manufactured a
+gradient when the reward was flat).
+
 Gruppen-relativer Policy-Gradient (kein Critic) mit KL-Anker an eine
 eingefrorene SFT-Referenz. Rollouts via generate.generate (KV-Cache + slot-Mask,
 identischer Conditioning-Pfad conditioning.build_cloud blade_weight=3.0),
@@ -25,16 +29,21 @@ import os
 import sys
 import time
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
+# Two levels up: this file lives in meshtron/training/, and the repo root is
+# what "scripts." and "meshtron." resolve against. It used to be one level,
+# left over from when this file sat in the root, which made the module import
+# but the script unrunnable -- scripts/verify_pipeline.py could not see it
+# because a script run from scripts/ already has that directory on sys.path.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from meshtron.data.conditioning import build_cloud
-from eval_family import load_model
+from scripts.eval_family import load_model
 from meshtron.training.generate import generate
 from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
 from meshtron.training.rewards_hexarow import HexaRowRewardConfig, make_hexarow_reward
@@ -91,6 +100,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="GRPO-Spike HexaRow cart")
     ap.add_argument("--ckpt", default="data/hexarow_sft_cart_ep584.pt")
     ap.add_argument("--tokens", default="data/hexarow_tokens_family_cart.pt")
+    ap.add_argument("--src", default=None,
+                    help="conditioning source (.pt with samples carrying "
+                         "surface_points), matched by name, for token files "
+                         "that do not embed it -- same flag and same meaning "
+                         "as train_hexarow_full.py. Not needed for the family "
+                         "token files, which carry their own.")
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--G", type=int, default=8)
     ap.add_argument("--items-per-step", type=int, default=1)
@@ -100,6 +115,19 @@ def main() -> int:
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--grad-clip", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--kl-estimator", choices=["k3", "naive"], default="k3",
+                    help="k3 (default) is the estimator GRPO specifies, "
+                         "exp(-r)+r-1: always >= 0, and its gradient pulls "
+                         "back towards the reference. naive is the plain "
+                         "log-ratio mean this file used to compute, kept only "
+                         "to reproduce the checkpoints trained with it. naive "
+                         "is not a divergence and is measurably wrong: with a "
+                         "flat reward (every advantage 0, so the correct "
+                         "gradient is 0) it still produced grad_norm 0.24, "
+                         "drove KL to -0.019 and RAISED entropy from 5.120 to "
+                         "5.146 -- gradient manufactured out of nothing, "
+                         "pushing the policy away from the reference. k3 gives "
+                         "grad_norm 0.0 on the same input.")
     ap.add_argument("--credit", choices=["uniform", "sep"], default="uniform")
     ap.add_argument("--decay", type=float, default=0.9)
     ap.add_argument("--log-csv", default="data/grpo_cart_log.csv")
@@ -136,6 +164,47 @@ def main() -> int:
 
     ds = torch.load(args.tokens, weights_only=False)
     items = list(ds["train"])
+    # Conditioning has to be resolvable before the first rollout. Token files
+    # of the family carry surface_points themselves; the older ones do not, and
+    # used to fail mid-training with a KeyError on 'vertices_polar' from deep
+    # inside build_cloud. Resolve it here, by name out of --src exactly as the
+    # supervised trainer does, and say plainly what is missing when it cannot
+    # be resolved at all.
+    def _has_cloud(d):
+        # surface_cloud() takes either key: surface_points (xyz) preferred,
+        # vertices_polar as the fallback. Older sources carry only the latter.
+        return (d.get("surface_points") is not None
+                or d.get("vertices_polar") is not None)
+
+    if items and not _has_cloud(items[0]):
+        if not args.src:
+            raise SystemExit(
+                f"{os.path.basename(args.tokens)} does not embed conditioning "
+                f"(no surface_points on its items), so --src is required: a .pt "
+                f"whose samples carry surface_points, matched by name. The "
+                f"family token files embed it and need no --src.")
+        src = torch.load(args.src, weights_only=False)
+        if isinstance(src, dict) and "samples" in src:
+            src = src["samples"]
+        by_name = {s.get("name", f"sample{i}"): s for i, s in enumerate(src)}
+        merged, missing = [], []
+        for it in items:
+            raw = by_name.get(it["name"])
+            if raw is None or not _has_cloud(raw):
+                missing.append(it["name"])
+                continue
+            add = {k: raw[k] for k in ("surface_points", "vertices_polar",
+                                       "is_blade") if raw.get(k) is not None}
+            merged.append({**it, **add})
+        if not merged:
+            raise SystemExit(
+                f"no item of {os.path.basename(args.tokens)} found "
+                f"conditioning in {os.path.basename(args.src)} "
+                f"(first missing: {missing[:3]})")
+        if missing:
+            print(f"note: {len(missing)} of {len(items)} items have no "
+                  f"conditioning in --src and are skipped")
+        items = merged
     print(f"policy d={cfg['d']} L={cfg['layers']} H={cfg['heads']} coords={coords} "
           f"npt={npt} cap={cap} | {len(items)} train items | G={args.G} "
           f"items/step={args.items_per_step} steps={args.steps} lr={args.lr} "
@@ -209,7 +278,13 @@ def main() -> int:
                             torch.clamp(ratio, 1.0 - args.clip,
                                         1.0 + args.clip) * a_t)
         loss_pg = -(obj * cw).sum() / denom
-        kl = ((logp_new - logp_ref) * mask).sum() / mask.sum()
+        # See --kl-estimator: the naive mean is kept as the default only
+        # because every existing checkpoint was trained with it.
+        _lr = logp_new - logp_ref
+        if args.kl_estimator == "k3":
+            kl = ((torch.exp(-_lr) + _lr - 1.0) * mask).sum() / mask.sum()
+        else:
+            kl = (_lr * mask).sum() / mask.sum()
         loss = loss_pg + args.beta * kl
 
         opt.zero_grad(set_to_none=True)

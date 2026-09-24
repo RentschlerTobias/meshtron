@@ -115,6 +115,28 @@ said so.
 Batch it with `scripts/run_conform_batch.py`, and check a blocking before
 mapping it with `scripts/detect_block_tjunctions.py`.
 
+## Training
+
+```
+uv run python scripts/test_training_e2e.py        # four phases, ~2 min
+```
+
+Supervised run, resume, real GRPO steps, then inference with the checkpoint it
+just trained. Each phase asserts the claim its stage has to make -- the loss
+falls, the resumed run continues instead of restarting, the best-val checkpoint
+loads and not merely exists, and GRPO does not move the policy when no reward
+says to. It runs at d=128 (1.3 M params) because it tests the path; production
+is d=512, 12 layers, 40 M.
+
+It found four real defects on its first run: `train_grpo.py` was not runnable
+as a script, it could not use a token file without embedded conditioning, the
+best-val checkpoint lacked the fields needed to load it, and the KL anchor was
+the plain log-ratio mean rather than a divergence -- which with a flat reward
+produced a gradient norm of 0.24 where the correct value is 0.
+`docs/decisions/2026-09-24-training-end-to-end.md` has the measurements.
+`--kl-estimator` now defaults to `k3`; `naive` reproduces the existing
+checkpoints, which were all trained with it.
+
 ## Where it stands
 
 Conformity is solved. Over the whole corpus at h=0.05, 679 of 680 samples pass

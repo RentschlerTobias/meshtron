@@ -12,7 +12,21 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Run as a file and __file__ gives the location. Paste a cell into a REPL and
+# the code is stdin, so there is no __file__ -- then locate showcase/ from the
+# working directory instead. Start the REPL in the repo root or in showcase/.
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    HERE = os.path.abspath("showcase" if os.path.isdir("showcase") else ".")
+
+if not os.path.isfile(os.path.join(HERE, "_common.py")):
+    raise RuntimeError(f"showcase/_common.py not found from {os.getcwd()!r} -- "
+                       "start the REPL in the meshtron repo root")
+
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
 import _common as C  # noqa: E402
 
 from meshtron.training import train_hexarow_full as T  # noqa: E402
@@ -103,6 +117,7 @@ with torch.no_grad():
     other = model(xin, pc, fc, slot=(None if C.SLOT_TRAINED else slotin))
     lo = T.weighted_loss(other, y, win, pad_id, ck["vocab"], lossf)
     ao = float((other.argmax(-1)[real0] == y[real0]).float().mean())
+
 print(f"   with the other slot convention: loss {float(lo):.4f}, "
       f"accuracy {100 * ao:.1f}%  <- the mismatch this checkpoint punishes")
 print(f"   perplexity {float(torch.exp(loss.detach())):.1f} over "
@@ -135,6 +150,7 @@ for name, mod in model.named_children():
     if g:
         n = torch.sqrt(sum((x * x).sum() for x in g))
         print(f"      {name:10s} {n:10.4f}")
+
 total = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 print(f"   total grad norm {total:.4f} (clipped at 1.0)")
 opt.step()
@@ -142,6 +158,7 @@ model.eval()
 with torch.no_grad():
     loss2 = T.weighted_loss(model(xin, pc, fc, slot=slot_arg), y, win, pad_id,
                             ck["vocab"], lossf)
+
 print(f"   loss {loss.item():.4f} -> {loss2.item():.4f} after one step")
 
 # %% [7] the learning-rate schedule
@@ -157,3 +174,4 @@ for s in xs:
           else base * 0.5 * (1 + np.cos(np.pi * (s - warm) / (steps - warm))))
     bar = "#" * int(40 * lr / base)
     print(f"   step {s:6d}  lr {lr:.2e}  {bar}")
+

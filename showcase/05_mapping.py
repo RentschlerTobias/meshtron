@@ -11,7 +11,21 @@ import types
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Run as a file and __file__ gives the location. Paste a cell into a REPL and
+# the code is stdin, so there is no __file__ -- then locate showcase/ from the
+# working directory instead. Start the REPL in the repo root or in showcase/.
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    HERE = os.path.abspath("showcase" if os.path.isdir("showcase") else ".")
+
+if not os.path.isfile(os.path.join(HERE, "_common.py")):
+    raise RuntimeError(f"showcase/_common.py not found from {os.getcwd()!r} -- "
+                       "start the REPL in the meshtron repo root")
+
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
 import _common as C  # noqa: E402
 
 from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
@@ -19,7 +33,7 @@ from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
 from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from meshtron.geometry.patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
                          max_kink_deg, snap_seam_path, write_debug_vtk)
-from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
+from meshtron.geometry.conform import _boundary_edge_pred  # noqa: E402
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 npz = os.path.join(C.BATCH, C.MACHINE, "sample.npz")
@@ -105,6 +119,7 @@ for key, Q in st.edge_pts.items():
     cid = int(st.edge_curve[key])
     kinds.append(0 if cid < 0 else (1 if cid < 900000 else 2))
     polys.append(np.asarray(Q, float))
+
 print(f"   {len(polys)} unique edges: "
       f"{kinds.count(1)} seam, {kinds.count(2)} geodesic, "
       f"{kinds.count(0)} chord")
@@ -123,6 +138,7 @@ write_debug_vtk(os.path.join(out, "16_edges.vtk"), polys,
 C.head("[5] quality")
 with open(mesh) as fh:
     L = fh.read().split("\n")
+
 i = next(k for k, l in enumerate(L) if l.startswith("POINTS"))
 n = int(L[i].split()[1])
 P = np.array([[float(v) for v in L[i + 1 + k].split()] for k in range(n)])
@@ -168,6 +184,7 @@ for k, (a, b) in enumerate(E):
     Q = EP[OFF[k]:OFF[k + 1]]
     poly[(int(a), int(b))] = Q
     poly[(int(b), int(a))] = Q[::-1]
+
 km = {}
 for r in range(fm.blocks.shape[0]):
     for c in range(8):
@@ -198,6 +215,7 @@ ref = os.path.join(out, "17_mapped_gtcurve.vtk")
 refill_curved(snapped, 0.05, ref, fm=shim, path_fn=gt_path, write_edges=False)
 with open(ref) as fh:
     L2 = fh.read().split("\n")
+
 i = next(k for k, l in enumerate(L2) if l.startswith("POINTS"))
 n2 = int(L2[i].split()[1])
 P2 = np.array([[float(v) for v in L2[i + 1 + k].split()] for k in range(n2)])

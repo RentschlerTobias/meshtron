@@ -390,8 +390,16 @@ def main():
             # torch.save von Model+Opt pro Epoche kostet sonst deutlich Zeit.
             if ep + 1 >= args.save_start and vl < best_val:
                 best_val = vl
+                # cfg/vocab/pad_id go in as well, so the best-val checkpoint
+                # can be LOADED for inference and not only resumed from. It
+                # used to carry weights without the shape information needed
+                # to rebuild the model, which made the best checkpoint of an
+                # interrupted run useless for generating anything.
+                ck_cfg = dict(vars(args))
+                ck_cfg["npt"] = npt
                 torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
                             "epoch": ep, "step": step, "best_val": best_val,
+                            "cfg": ck_cfg, "vocab": vocab, "pad_id": pad_id,
                             "r_bounds": rb, "z_bounds": zb,
                             "coords": coords, "npt": npt}, args.ckpt)
                 msg += f"  checkpoint -> {args.ckpt} (best-val {best_val:.3f})"

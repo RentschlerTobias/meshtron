@@ -29,7 +29,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from meshtron.data.polytron_tokenizer import PolytronTokenizer
-from polytron_pointer_model import PointerFaceModel, build_examples
+from meshtron.legacy.polytron_pointer_model import PointerFaceModel, build_examples
 
 PAD_TGT = -1
 

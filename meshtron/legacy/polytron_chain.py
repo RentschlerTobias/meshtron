@@ -28,9 +28,9 @@ import matplotlib.pyplot as plt
 
 from meshtron.data.polytron_tokenizer import PolytronTokenizer
 from meshtron.training.trainer import TrainingCancelled
-import polytron_vertex_model as vh
-import polytron_pointer_model as ph
-import polytron_geom_model as gh
+from meshtron.legacy import polytron_vertex_model as vh
+from meshtron.legacy import polytron_pointer_model as ph
+from meshtron.legacy import polytron_geom_model as gh
 from meshtron.training import train_pointer as tp
 
 

@@ -702,7 +702,7 @@ def main():
                     help="hexa-row mode: omit the token-sequence panel, 3D mesh only")
     a = ap.parse_args()
     if a.hexa:
-        from tokenization_animation_3d_hexa import generate_hexa
+        from meshtron.viz.tokenization_animation_3d_hexa import generate_hexa
         generate_hexa(a.out_dir, a.data, a.idx, start_rule=a.hexa_start,
                       granularity=a.gran, eoe=a.eoe, coords=a.coords,
                       show_bar=not a.no_bar)

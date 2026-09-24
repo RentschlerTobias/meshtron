@@ -327,7 +327,7 @@ class MeshtronTUI(App):
 
                     Trainer(cfg).run(on_epoch=on_epoch)
                 elif cfg.model_family == "polytron":
-                    from polytron_chain import run_polytron
+                    from meshtron.legacy.polytron_chain import run_polytron
                     run_polytron(cfg, stop_check=self._stop_event.is_set)
                 else:
                     print(f"Unknown model_family={cfg.model_family!r}")

@@ -5,7 +5,8 @@ Subpackages:
     geometry   feature model, seam curves, edge routing, transfinite refill
     model      the transformer and its encoders
     data       tokenizers, conditioning, datasets, augmentation
-    training   supervised and RL training, rewards, generation
+    training   supervised and RL training, rewards, generation, the 2D stack
+    viz        plotting, tokenisation animations, the terminal UI
     legacy     earlier generations, kept for reference, not on the active path
 
 Importing this package puts every subpackage directory on sys.path. Several
@@ -25,7 +26,8 @@ import os as _os
 import sys as _sys
 
 _here = _os.path.dirname(_os.path.abspath(__file__))
-for _sub in ("geometry", "model", "data", "training", "legacy"):
+for _sub in ("geometry", "model", "data", "training", "viz",
+             "legacy"):
     _p = _os.path.join(_here, _sub)
     if _os.path.isdir(_p) and _p not in _sys.path:
         _sys.path.insert(0, _p)

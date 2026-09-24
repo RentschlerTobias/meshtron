@@ -6,7 +6,7 @@ except Exception:  # pragma: no cover - optional build dependency may be missing
 import numpy as np
 import torch
 
-import plotting_tools
+from meshtron.viz import plotting_tools
 
 
 def ensure_counter_clockwise(coords, indices):

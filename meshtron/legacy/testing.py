@@ -1,5 +1,5 @@
 import torch
-import plotting_tools
+from meshtron.viz import plotting_tools
 from meshtron.training.trainer import Trainer
 from meshtron.data.tokenizer_v2 import Tokenizer2D
 from meshtron.data.dataset import MeshData

@@ -2,7 +2,7 @@ import openmesh as om
 import numpy as np
 import torch
 
-import plotting_tools
+from meshtron.viz import plotting_tools
 
 
 def torch_to_openmesh(vertices_2d, faces_4n):

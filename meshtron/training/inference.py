@@ -18,7 +18,7 @@ from typing import Tuple
 import torch
 from torch_geometric.data import Data
 
-import plotting_tools
+from meshtron.viz import plotting_tools
 from meshtron.training.config import PipelineConfig
 from meshtron.data.dataset import MeshData
 from meshtron.model.quadtron import Quadtron

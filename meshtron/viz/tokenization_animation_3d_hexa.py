@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import torch
 
-from tokenization_animation_3d import (_golden,
+from meshtron.viz.tokenization_animation_3d import (_golden,
                                        render_html, order_color,
                                        INK, GRID_EDGE, ACTIVE)
-import tokenization_animation_3d as base
+from meshtron.viz import tokenization_animation_3d as base
 from meshtron.data.hexa_row_tokenizer import (_HEX_FACE_Q, HexaRowTokenizer, build_row_plan,
                                 roundtrip)
 

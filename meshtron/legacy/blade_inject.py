@@ -19,7 +19,7 @@ import torch
 from torch_geometric.data import Data
 from typing import Dict, List, Optional, Tuple
 
-from reconstruct_domain import (polar_to_cartesian, merge_duplicate_vertices,
+from meshtron.legacy.reconstruct_domain import (polar_to_cartesian, merge_duplicate_vertices,
                                 build_hermite_edges, coons_patch_2d,
                                 quadratic_bezier_2d, _resample_curve)
 

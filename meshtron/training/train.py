@@ -86,7 +86,7 @@ def main() -> None:
         result = Trainer(cfg).run()
         print(json.dumps(result.__dict__, indent=2, default=str))
     elif cfg.model_family == "polytron":
-        from polytron_chain import run_polytron
+        from meshtron.legacy.polytron_chain import run_polytron
         run_polytron(cfg)
     else:
         raise ValueError(f"Unknown model_family={cfg.model_family!r} (expected 'quadtron' or 'polytron')")

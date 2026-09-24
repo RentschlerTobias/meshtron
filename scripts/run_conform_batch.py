@@ -86,7 +86,8 @@ def run_one(name: str, args) -> dict:
         edge_post_fn=edge_post,
         face_project_fn=(make_face_projector(geo, stats)
                          if args.project_faces else None),
-        is_boundary_face=make_boundary_face_test(fm))
+        is_boundary_face=(make_boundary_face_test(fm)
+                          if args.reject_interior_faces else None))
     rejected = int(rep.get("single_owner_faces_rejected", 0))
     bids = rep.pop("boundary_point_ids")
     rep.pop("boundary_quads", None)
@@ -140,6 +141,7 @@ def main() -> int:
     ap.add_argument("--blade-clearance", type=float, default=0.06)
     ap.add_argument("--clearance-chord-frac", type=float, default=0.25)
     ap.add_argument("--seam-tol", type=float, default=1e-9)
+    ap.add_argument("--reject-interior-faces", action="store_true")
     ap.add_argument("--project-faces", action="store_true", default=True)
     ap.add_argument("--keep-failing-vtk", action="store_true")
     ap.add_argument("--feature-cache",

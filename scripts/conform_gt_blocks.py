@@ -374,12 +374,17 @@ def main() -> int:
                          "path cannot cross the blade footprint, so edges run "
                          "AROUND the blade; no arc/chord guard. Writes "
                          "<prefix>_geodesic_edges.vtk + _routing.json")
-    ap.add_argument("--trust-single-owner", action="store_true",
-                    help="treat every block face with one owner as domain "
-                         "boundary. 17%% of the corpus carries block-level "
-                         "T-junctions whose interfaces look exactly like that "
-                         "while lying inside the domain; the default rejects "
-                         "them by ray casting.")
+    ap.add_argument("--reject-interior-faces", action="store_true",
+                    help="try to reject single-owner faces that lie inside the "
+                         "domain (block-level T-junctions). OFF by default: by "
+                         "the time the test runs, the edges of such a wall have "
+                         "already been routed onto the geometry, so it neither "
+                         "catches machine_0387_n8000's two T-junctions nor "
+                         "avoids false positives on clean samples -- and a "
+                         "wrongly rejected face is neither projected nor "
+                         "measured, which puts a hole in the conformity number. "
+                         "Use scripts/detect_block_tjunctions.py on blocks.vtk "
+                         "to gate the dataset instead.")
     ap.add_argument("--no-seam-snap", action="store_true",
                     help="keep the seam navigator's raw path instead of "
                          "snapping it back onto the seam polyline and the npz "
@@ -516,8 +521,9 @@ def main() -> int:
     rep = refill_curved(C_snap, args.target_h, curved_path, fm=target,
                         path_fn=path_fn, edge_post_fn=edge_post_fn,
                         face_project_fn=face_fn,
-                        is_boundary_face=(None if args.trust_single_owner
-                                          else make_boundary_face_test(fm)))
+                        is_boundary_face=(make_boundary_face_test(fm)
+                                          if args.reject_interior_faces
+                                          else None))
 
     # Boundary conformity tripwire on the exported mesh.
     import export_vtk  # noqa: E402  (curved_bridge inserted the path)

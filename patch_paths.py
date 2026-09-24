@@ -540,7 +540,8 @@ def snap_seam_path(seam, fm, R: np.ndarray) -> np.ndarray:
 
 
 def make_boundary_face_test(fm, surface_points=None, surface_tris=None,
-                            delta_frac: float = 0.25, seed: int = 0):
+                            delta_frac: float = 0.25, seed: int = 0,
+                            min_dist_cells: float = 1.0):
     """is_boundary_face(ids, G) -> bool for refill_curved.
 
     A block face owned by a single block is not necessarily on the domain
@@ -549,6 +550,15 @@ def make_boundary_face_test(fm, surface_points=None, surface_tris=None,
     Offset the face grid's centre to both sides along its normal and ray cast
     against the closed npz surface -- a real boundary face has exactly one side
     inside, an interior wall has both.
+
+    The ray cast alone is not enough: on T-junction-free samples it still
+    rejected faces whose grid sits exactly ON the npz surface (median distance
+    0.0000), and a wrongly rejected face is neither projected nor measured, so
+    the conformity number would keep a hole. A face is therefore only rejected
+    when it ALSO sits clearly off the geometry -- median distance above
+    `min_dist_cells` times its own cell size. Real T-junction walls measured
+    0.06 to 0.09 against a cell size of 0.048 (1.3 to 1.9 cells); the false
+    positives measured 0.000 to 0.020.
 
     `delta_frac` is the offset as a fraction of the face's shorter side, so the
     test scales with the block rather than with the mesh.
@@ -591,6 +601,11 @@ def make_boundary_face_test(fm, surface_points=None, surface_tris=None,
         delta = delta_frac * min(np.linalg.norm(du), np.linalg.norm(dv))
         if delta <= 1e-12:
             return True
-        return _inside(c + delta * n) != _inside(c - delta * n)
+        if _inside(c + delta * n) != _inside(c - delta * n):
+            return True                      # one side out: real boundary
+        d, _, _ = fm.surface_nearest(G.reshape(-1, 3), k=32)
+        cell = max(np.linalg.norm(du) / max(ni - 1, 1),
+                   np.linalg.norm(dv) / max(nj - 1, 1))
+        return float(np.median(d)) <= min_dist_cells * cell
 
     return fn

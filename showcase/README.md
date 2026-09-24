@@ -64,6 +64,25 @@ data/showcase/16_edges.vtk            routed edges, colour by `route_kind` (05)
 data/showcase/17_mapped_gtcurve.vtk   same corners, own edge curves (05)
 ```
 
+## Generating and comparing, from the command line
+
+Two commands that used to live in a stray `showcase.py` at the repo root -- a
+file of shell notes with a `.py` extension, which collided with this package
+directory:
+
+```
+# greedy, writes data/compare_<item>.vtk
+uv run python scripts/compare_viz.py \
+    --tokens data/hexarow_tokens_family_cart.pt \
+    --ckpt data/grpo_cart_step300.pt --idx 687
+
+# stochastic, k rollouts -> <stem>_r<i>.vtk per file
+uv run python scripts/compare_viz.py \
+    --tokens data/hexarow_tokens_family_cart.pt \
+    --ckpt data/grpo_cart_step300.pt --idx 683 \
+    --temperature 0.7 --k 4 --out data/gen_test.vtk
+```
+
 For a presentation rather than a walkthrough there is
 `scripts/make_pipeline_demo.py`, which writes one numbered VTK per pipeline
 stage plus a README, and `scripts/make_inverted_debug.py`, which isolates the

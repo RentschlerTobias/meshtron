@@ -72,19 +72,26 @@ def run_one(name: str, args) -> dict:
         res = seam_fn(p0, p1, n)
         return res if res is not None else geo(p0, p1, n)
 
+    box: dict = {}
+
+    def edge_post(st, corner_ids, C_s, blks):
+        box["st"] = st
+        blend_chord_edges(st, corner_ids, C_s, blks, stats=stats)
+
     out_vtk = os.path.join(args.out, f"{name}_refill.vtk")
     rep = refill_curved(
         C_snap, args.target_h, out_vtk, fm=target, path_fn=path_fn,
         write_edges=False,
-        edge_post_fn=(lambda st, ci, cs, bl:
-                      blend_chord_edges(st, ci, cs, bl, stats=stats)),
+        edge_post_fn=edge_post,
         face_project_fn=(make_face_projector(geo, stats)
                          if args.project_faces else None))
     bids = rep.pop("boundary_point_ids")
     rep.pop("boundary_quads", None)
     pts = _read_points(out_vtk)
     d, _, _ = fm.surface_nearest(pts[bids], k=32)
-    kinks = [max_kink_deg(q) for q in _edge_arrays(rep)] or [0.0]
+    st = box.get("st")
+    kinks = ([max_kink_deg(np.asarray(q, float))
+              for q in st.edge_pts.values()] if st is not None else [0.0])
     row = {
         "name": name, "blocks": nb, "cells": int(rep["cells_after"]),
         "watertight": bool(rep["watertight"]),
@@ -98,6 +105,7 @@ def run_one(name: str, args) -> dict:
         "blended": int(stats.get("edges_blended", 0)),
         "faces_projected": int(stats.get("faces_projected", 0)),
         "max_kink_deg": float(max(kinks)),
+        "kink_edges_over_20deg": int(sum(1 for k in kinks if k > 20.0)),
         "seconds": round(time.time() - t0, 1),
     }
     row["gate_pass"] = bool(row["boundary_max"] <= BOUNDARY_TOL
@@ -107,10 +115,6 @@ def run_one(name: str, args) -> dict:
     else:
         os.remove(out_vtk)
     return row
-
-
-def _edge_arrays(rep) -> list:
-    return []          # kinks are reported by the single-sample driver
 
 
 def _read_points(path: str) -> np.ndarray:

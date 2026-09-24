@@ -128,6 +128,12 @@ loads and not merely exists, and GRPO does not move the policy when no reward
 says to. It runs at d=128 (1.3 M params) because it tests the path; production
 is d=512, 12 layers, 40 M.
 
+`scripts/verify_pipeline.py` covers the rest: tokenisation in 2D and 3D,
+cartesian and polar, a real forward and training step for both model families,
+the GRPO entry point, the mapping, and inference end to end. 12 pass, 0 fail,
+0 missing. The 2D corpus lives outside the repo; `meshtron.data.quad_domain`
+adapts its field names to the ones `MeshData` reads.
+
 It found four real defects on its first run: `train_grpo.py` was not runnable
 as a script, it could not use a token file without embedded conditioning, the
 best-val checkpoint lacked the fields needed to load it, and the KL anchor was

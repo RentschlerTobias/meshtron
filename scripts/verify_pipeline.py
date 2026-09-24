@@ -92,15 +92,19 @@ def tok3d(coords):
 def tok2d(dim):
     """Tokenizer2D round trip on a quad mesh."""
     from meshtron.data.tokenizer_v2 import Tokenizer2D
-    p = os.path.join(DATA, "quadtron_data_3d_smoke.pt")
     if dim == 3:
-        meshes = torch.load(need(p), weights_only=False)
+        meshes = torch.load(need(os.path.join(DATA, "quadtron_data_3d_smoke.pt")),
+                            weights_only=False)
         m = meshes[0]
         verts = m.x[:, :3].numpy()
         faces = m.faces.numpy()
     else:
-        raise NotImplementedError(
-            "no 2D quad dataset in data/ -- only quadtron_data_3d*.pt exist")
+        # The 2D corpus lives outside the repo; quad_domain adapts its field
+        # names to the ones MeshData and the tokenizer read.
+        from meshtron.data.quad_domain import load_quad_domain
+        m = load_quad_domain(limit=1)[0]
+        verts = m.x[:, :2].numpy()
+        faces = m.faces.numpy()
     dir_class = getattr(m, "dir_class", None)
     tok = Tokenizer2D(quantization_levels=128, dim=dim, verbose=False)
     seq = tok.tokenize(torch.as_tensor(verts), torch.as_tensor(faces),
@@ -239,19 +243,48 @@ def grpo_3d():
 
 
 def train_step_2d(dim):
-    """One Quadtron step through the real trainer path."""
+    """One real Quadtron step: forward, loss, backward, gradient.
+
+    This used to build the dataset and stop there, which says nothing about
+    whether the model trains. A 2D blocking is 12 nodes and 6 quads, so the
+    whole step runs on the CPU in under a second.
+    """
+    import torch.nn.functional as F
     from meshtron.data.dataset import MeshData
     from meshtron.data.tokenizer_v2 import Tokenizer2D
     from meshtron.model.quadtron import Quadtron
     if dim == 2:
-        raise NotImplementedError(
-            "no 2D quad dataset in data/ -- only quadtron_data_3d*.pt exist")
-    meshes = torch.load(need(os.path.join(DATA, "quadtron_data_3d_smoke.pt")),
-                        weights_only=False)[:2]
+        from meshtron.data.quad_domain import load_quad_domain
+        meshes = load_quad_domain(limit=2)
+    else:
+        meshes = torch.load(
+            need(os.path.join(DATA, "quadtron_data_3d_smoke.pt")),
+            weights_only=False)[:2]
     tok = Tokenizer2D(quantization_levels=128, dim=dim, verbose=False)
     ds = MeshData(meshes, tok, n_sample_points=64, verbose=False, dim=dim)
     item = ds[0]
-    return f"dataset builds, {len(ds)} items, first item {type(item).__name__}"
+    inp = item["input_tokens"][None]
+    tgt = item["target_tokens"][None]
+    pc = item["point_cloud"][None][..., :dim].float()
+    fc = torch.tensor([float(item["face_count"])])
+    pos = torch.arange(inp.shape[1])[None]
+    model = Quadtron(vocab_size=int(tok.vocab_size), d_model=64,
+                     max_seq_length=int(ds.max_seq_length) + 8, n_latents=8,
+                     input_dim=dim, n_heads=2, stage_layers=(1, 1, 1, 1, 1),
+                     min_face_count=1, max_face_count=10000, verbose=False)
+    logits = model(inp, pc, fc, pos)
+    loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]),
+                           tgt.reshape(-1), ignore_index=int(item["pad_token"]))
+    loss.backward()
+    gnorm = sum(float(p.grad.norm()) ** 2 for p in model.parameters()
+                if p.grad is not None) ** 0.5
+    if not torch.isfinite(loss):
+        raise RuntimeError(f"loss is not finite: {float(loss)}")
+    if gnorm <= 0.0:
+        raise RuntimeError("no gradient reached the parameters")
+    n_par = sum(p.numel() for p in model.parameters())
+    return (f"{len(ds)} items, {inp.shape[1]} tokens, loss "
+            f"{float(loss):.3f}, grad {gnorm:.1f}, {n_par / 1e6:.1f} M params")
 
 
 # --------------------------------------------------------------------------

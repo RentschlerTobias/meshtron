@@ -3,14 +3,26 @@ through the whole chain on a single machine.
 
 Stages, in the order they run:
 
-  01 geometry      the parametric runner geometry as the labelled npz surface
-  02 tet mesh      the gmsh volume mesh the hex mesher starts from
+  01 tet mesh      the gmsh volume mesh, tets only
+  02 geometry      the labelled surface EXTRACTED FROM IT, which is what the
+                   rest of the chain treats as the geometry
   03 point cloud   what the transformer actually sees as conditioning
   04 algohex       AlgoHex's fine hex mesh, coloured by block
   05 block complex the coarse block structure the export keeps (GT)
   06 transformer   the block structure the transformer generates
   07 post GT       GT blocks conformed to the geometry and refilled (this repo)
   08 post generated  the same for the generated blocks
+
+Stage 0 is the parametric definition (30 cV_ru values in params.json); it has no
+renderable form here, so the chain starts at the tet mesh. Note the direction:
+the npz surface is the tet mesh's boundary -- same 12539 nodes, and its 19516
+boundary facets are exactly the npz triangles -- so the surface comes AFTER the
+volume mesh, not before it.
+
+The gmsh file mixes dimensions (8 vertices, 530 lines, 19516 triangles and
+44337 tets, with a `color` tag per gmsh entity). ParaView then draws the
+triangles on top of the tets and colours everything by entity tag, which looks
+like a broken surface. Stage 01 therefore keeps the tets alone.
 
 Everything is copied or rebuilt into one directory with numbered names and a
 README, so the files can be dropped into ParaView in order.
@@ -117,22 +129,57 @@ def main() -> int:
     z = np.load(npz, allow_pickle=True)
     made = []
 
-    # 01 geometry
-    p = os.path.join(out, "01_geometry_surface.vtk")
+    # 01 tet mesh (tets only; the gmsh file also carries vertices, lines and
+    # the boundary triangles, which ParaView would draw on top)
+    tet = os.path.join(BATCH, base, f"{base}_tet.vtk")
+    if os.path.exists(tet):
+        with open(tet) as fh:
+            L = fh.read().split("\n")
+        i = next(k for k, l in enumerate(L) if l.startswith("POINTS"))
+        npts = int(L[i].split()[1])
+        pts = [L[i + 1 + k] for k in range(npts)]
+        j = next(k for k, l in enumerate(L) if l.startswith("CELLS"))
+        ncl = int(L[j].split()[1])
+        rows = [L[j + 1 + k].split() for k in range(ncl)]
+        ct = next(k for k, l in enumerate(L) if l.startswith("CELL_TYPES"))
+        ctypes = [int(L[ct + 1 + k]) for k in range(ncl)]
+        sc = next((k for k, l in enumerate(L)
+                   if l.startswith("SCALARS")), None)
+        col = ([int(float(L[sc + 2 + k])) for k in range(ncl)]
+               if sc is not None else [0] * ncl)
+        keep = [k for k in range(ncl) if ctypes[k] == 10]
+        with open(os.path.join(out, "01_tet_mesh.vtk"), "w") as fh:
+            fh.write(f"# vtk DataFile Version 2.0\n{name} stage 01 gmsh tet "
+                     f"mesh ({len(keep)} tets, scalar color = gmsh entity "
+                     f"tag)\nASCII\nDATASET UNSTRUCTURED_GRID\n")
+            fh.write(f"POINTS {npts} double\n")
+            for q in pts:
+                fh.write(q + "\n")
+            fh.write(f"CELLS {len(keep)} {5 * len(keep)}\n")
+            for k in keep:
+                fh.write(" ".join(rows[k]) + "\n")
+            fh.write(f"CELL_TYPES {len(keep)}\n")
+            for _ in keep:
+                fh.write("10\n")
+            fh.write(f"CELL_DATA {len(keep)}\nSCALARS color int 1\n")
+            fh.write("LOOKUP_TABLE default\n")
+            for k in keep:
+                fh.write(f"{col[k]}\n")
+        made.append(("01_tet_mesh.vtk",
+                     f"gmsh tetrahedral volume mesh, tets only "
+                     f"({len(keep)} tets)"))
+
+    # 02 geometry surface, extracted from the tet mesh boundary
+    p = os.path.join(out, "02_geometry_surface.vtk")
     _write_tris(p, np.asarray(z["surface_points"], float),
                 np.asarray(z["surface_tris"], np.int64),
                 np.asarray(z["surface_tri_label"], np.int64),
-                f"{name} stage 01 geometry: npz surface, scalar patch_label "
+                f"{name} stage 02 geometry: npz surface, scalar patch_label "
                 f"(1 inlet, 2 outlet, 3/4 periodic, 5 hub, 6 shroud, "
                 f"7 blade hull)")
-    made.append(("01_geometry_surface.vtk",
-                 "runner geometry as the labelled npz surface"))
-
-    # 02 tet mesh
-    tet = os.path.join(BATCH, base, f"{base}_tet.vtk")
-    if os.path.exists(tet):
-        shutil.copyfile(tet, os.path.join(out, "02_tet_mesh.vtk"))
-        made.append(("02_tet_mesh.vtk", "gmsh tetrahedral volume mesh"))
+    made.append(("02_geometry_surface.vtk",
+                 "labelled boundary surface of the tet mesh -- the geometry "
+                 "the rest of the chain works against"))
 
     # 03 conditioning point cloud
     md = args.map_dir or os.path.join(ROOT, "data", f"map_batch__{name}")
@@ -224,8 +271,13 @@ def main() -> int:
                  "chain.\n\n")
         for f, d in made:
             fh.write(f"- `{f}` -- {d}\n")
-        fh.write("\nColouring hints: stage 01 by `patch_label`, 04 and 05 and "
-                 "06 by `block_id`, 07 by `block_id`.\n")
+        fh.write("\nColouring: 01 by `color` (gmsh entity tag), 02 by "
+                 "`patch_label`, 04 to 07 by `block_id`.\n")
+        fh.write("\nStage 0 is the parametric definition (30 `cV_ru` values "
+                 "in params.json) and has no renderable form here. The surface "
+                 "in stage 02 is the boundary of the volume mesh in stage 01 "
+                 "-- same 12539 nodes, and its 19516 boundary facets are "
+                 "exactly the npz triangles.\n")
     print(f"\nwrote {len(made)} stages to {out}/")
     for f, d in made:
         sz = os.path.getsize(os.path.join(out, f)) / 1e6

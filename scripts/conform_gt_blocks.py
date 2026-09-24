@@ -59,10 +59,10 @@ from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noq
 from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
 from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
-from meshtron.geometry.patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
-                         blend_chord_edges, make_boundary_face_test,
-                         make_face_projector, max_kink_deg, snap_seam_path,
-                         write_debug_vtk)
+from meshtron.geometry.patch_paths import (  # noqa: E402
+    BLEND_ID_BASE, PatchPaths, blend_boundary_edges, blend_chord_edges,
+    make_boundary_face_test, make_face_projector, max_kink_deg,
+    snap_seam_path, write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -413,6 +413,13 @@ def main() -> int:
                     help="cap the effective blade clearance of an edge at this "
                          "fraction of its own chord; a short edge cannot bow a "
                          "full clearance away without creasing.")
+    ap.add_argument("--blend-boundary", type=int, default=0, metavar="N",
+                    help="pull routed boundary edges towards the shape of "
+                         "their parallel rails, N passes. A shortest path is "
+                         "the wrong shape for a block edge; four passes cut "
+                         "inverted cells by a third to two thirds with the "
+                         "boundary error unchanged. Only edges belonging "
+                         "unambiguously to one patch are touched.")
     ap.add_argument("--blend-interior", action="store_true",
                     help="give interior chord edges a shape blended from the "
                          "parallel rails of their direction class (plan v4). "
@@ -511,6 +518,10 @@ def main() -> int:
 
     def edge_post_fn(st, corner_ids, C_s, blks):
         final_st.append(st)
+        if args.blend_boundary and geo is not None:
+            blend_boundary_edges(st, corner_ids, C_s, blks, geo,
+                                 passes=args.blend_boundary,
+                                 stats=route_stats)
         if args.blend_interior:
             blend_chord_edges(st, corner_ids, C_s, blks, stats=route_stats)
 
@@ -638,6 +649,9 @@ def main() -> int:
             "max_deg": float(max(kink_all, default=0.0)),
             "p90_deg": float(np.percentile(kink_all, 90)) if kink_all else 0.0,
             "edges_over_20deg": int(sum(1 for k in kink_all if k > 20.0))},
+        "blend_boundary": {
+            "passes": int(args.blend_boundary),
+            "edges_touched": int(route_stats.get("edges_blend_boundary", 0))},
         "blend_interior": {
             "enabled": bool(args.blend_interior),
             "edges": int(route_stats.get("edges_blended", 0))},

@@ -633,3 +633,94 @@ def make_boundary_face_test(fm, surface_points=None, surface_tris=None,
         return float(np.median(d)) <= min_dist_cells * cell
 
     return fn
+
+
+def blend_boundary_edges(st, corner_ids, C_snap, blocks, patch_paths,
+                         passes: int = 4, stats: dict | None = None) -> int:
+    """Pull routed boundary edges towards the shape their parallel rails have.
+
+    A shortest path on a patch is the wrong shape for a block edge. Refilled
+    with its own edge polylines, a blocking gives 9 inverted cells where the
+    routed ones give 218 -- same corners, same cell count. The block topology
+    carries the missing information: within a block, the three other edges of
+    the same direction class are this edge's parallel rails, and their
+    deviation from their own chord is the shape this one should share.
+
+    Only edges that belong unambiguously to ONE patch are touched, and the
+    result is projected back onto it, so conformity is untouched. Seam edges
+    and interior chords are left alone. Iterating helps because the rails are
+    themselves being corrected: measured inverted cells over four passes,
+
+        machine_0034_n2000   218 -> 158 -> 146 -> 144
+        machine_0155_n8000   573 -> 450 -> 344 -> 293
+        machine_0111_n8000   909 -> 593 -> 431 -> 326
+
+    with the boundary error unchanged at 1e-10. It does not reach the 9 of the
+    blocking's own curves, so the shape question is improved here, not closed.
+
+    Runs as part of `edge_post_fn`, before the Coons faces are built.
+    """
+    from meshtron.geometry.edge_curves import CORNERS, local_edges
+
+    occ: dict = {}
+    for r in range(len(blocks)):
+        for li, lj, ax in local_edges():
+            a, b = int(corner_ids[r, li]), int(corner_ids[r, lj])
+            occ.setdefault((a, b) if a < b else (b, a), []).append(
+                (r, ax, li, lj))
+    pos = {int(corner_ids[r, c]): C_snap[r, c]
+           for r in range(len(blocks)) for c in range(8)}
+    is_bnd = patch_paths.is_boundary
+
+    def canon(li, lj, ax):
+        return (li, lj) if CORNERS[li][ax] == 0 else (lj, li)
+
+    done = 0
+    for _ in range(int(passes)):
+        for key in list(st.edge_pts.keys()):
+            if int(st.edge_curve.get(key, -1)) < 0:
+                continue                       # interior chord
+            if is_bnd is not None and not is_bnd(pos[key[0]], pos[key[1]]):
+                continue
+            p0c, p1c = pos[key[0]], pos[key[1]]
+            labs = patch_paths.candidates(p0c, p1c)
+            if len(labs) != 1:
+                continue                       # ambiguous: leave it alone
+            patch = patch_paths.patches.get(int(labs[0]))
+            if patch is None:
+                continue
+            Q = np.asarray(st.edge_pts[key], float)
+            devs = []
+            for (r, ax, li, lj) in occ.get(key, []):
+                for (li2, lj2, ax2) in local_edges():
+                    if ax2 != ax:
+                        continue
+                    a2 = int(corner_ids[r, li2])
+                    b2 = int(corner_ids[r, lj2])
+                    k2 = (a2, b2) if a2 < b2 else (b2, a2)
+                    if k2 == key or int(st.edge_curve.get(k2, -1)) < 0:
+                        continue
+                    lo2, hi2 = canon(li2, lj2, ax)
+                    Q2 = np.asarray(st.get_edge(int(corner_ids[r, lo2]),
+                                                int(corner_ids[r, hi2])),
+                                    float)
+                    if len(Q2) != len(Q):
+                        continue
+                    devs.append(Q2 - np.linspace(Q2[0], Q2[-1], len(Q2)))
+            if not devs:
+                continue
+            D = np.mean(devs, axis=0)
+            r, ax, li, lj = occ[key][0]
+            lo, hi = canon(li, lj, ax)
+            a0 = int(corner_ids[r, lo])
+            p0, p1 = C_snap[r, lo], C_snap[r, hi]
+            new = np.linspace(p0, p1, len(Q)) + D
+            new[0], new[-1] = p0, p1
+            if len(new) > 2:
+                _, new[1:-1] = patch.project(new[1:-1])
+            st.edge_pts[key] = new if a0 == key[0] else new[::-1]
+            done += 1
+    if stats is not None:
+        stats["edges_blend_boundary"] = stats.get("edges_blend_boundary",
+                                                  0) + done
+    return done

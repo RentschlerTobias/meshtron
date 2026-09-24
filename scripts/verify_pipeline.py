@@ -297,6 +297,60 @@ def _points(path):
                      for k in range(n)])
 
 
+def inference_end_to_end():
+    """The product path, start to finish: a geometry the model never trained on
+    goes in, a CFD mesh comes out.
+
+    Runs scripts/infer.py as a subprocess on purpose -- the entry point users
+    call is what gets tested, not a reimplementation of it that could drift.
+    Coarse target_h and one greedy rollout keep it under a minute; the
+    assertions are the two that matter, watertight and the mesh actually
+    sitting on the geometry.
+    """
+    import gc
+    import json
+    import subprocess
+    import tempfile
+    npz = need(os.path.join(DATA, "hex3d_algohex", "batch",
+                            "machine_0034_n2000", "sample.npz"))
+    ckpt = need(os.path.join(DATA, "grpo_cart_step300.pt"))
+    # The checks above left model weights on the GPU, and 8 GB does not fit
+    # both them and a second process. Give the card back before spawning;
+    # if it still will not fit, run on the CPU rather than report a failure
+    # that is about this machine and not about the code.
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    cmd = [sys.executable, os.path.join(ROOT, "scripts", "infer.py"),
+           "--npz", npz, "--ckpt", ckpt, "--k", "1", "--target-h", "0.2"]
+    note = ""
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run(cmd + ["--out-dir", td], capture_output=True,
+                           text=True)
+        rp = os.path.join(td, "report.json")
+        if not os.path.exists(rp) and "CUDA out of memory" in r.stderr:
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+            r = subprocess.run(cmd + ["--out-dir", td], capture_output=True,
+                               text=True, env=env)
+            note = ", on CPU (GPU was occupied)"
+        if not os.path.exists(rp):
+            raise RuntimeError(f"no report.json (exit {r.returncode}): "
+                               f"{r.stderr.strip()[-300:]}")
+        rep = json.load(open(rp))
+    st = rep["stages"]
+    c = st["5_conform"]
+    if not c["watertight"]:
+        raise RuntimeError("mesh is not watertight")
+    if c["boundary"]["max"] > 1e-3:
+        raise RuntimeError(f"mesh misses the geometry by "
+                           f"{c['boundary']['max']:.3e}")
+    return (f"{st['1_geometry']['tris']} tris -> "
+            f"{st['2_cloud']['n_points']} cloud points -> "
+            f"{st['4_snap']['chosen']['n_blocks']} generated blocks -> "
+            f"{c['cells']} cells, boundary {c['boundary']['max']:.2e}, "
+            f"{c['inverted']} inverted{note}")
+
+
 GROUPS = {
     "tokenisation": [
         ("3D hexarow, polar", lambda: tok3d("polar")),
@@ -316,6 +370,9 @@ GROUPS = {
     ],
     "geometry": [
         ("mapping and refill", mapping_real),
+    ],
+    "inference": [
+        ("geometry to CFD mesh, held out", inference_end_to_end),
     ],
 }
 

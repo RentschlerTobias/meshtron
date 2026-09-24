@@ -27,3 +27,7 @@ data/
 HANDOFF*.md
 *.bak
 graphify-out/
+
+# stray outputs that used to land in the repo root
+/gen_*.vtk
+/*_toklines.*

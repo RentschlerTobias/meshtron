@@ -16,7 +16,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
 
@@ -105,8 +106,15 @@ def main():
     data = torch.load(a.data, weights_only=False)
     rb, zb = dataset_bounds(data)
     tok = HexaRowTokenizer(r_bounds=rb, z_bounds=zb)
-    base = a.out_base or (a.data.replace("/", "_").replace(".pt", "")
-                          + f"_idx{a.idx}_toklines")
+    # Under data/, not the repo root: the default used to derive the name
+    # from the data path and write it into the working directory.
+    if a.out_base:
+        base = a.out_base
+    else:
+        stem = os.path.basename(a.data).replace(".pt", "")
+        out = os.path.join(ROOT, "data", "token_lines")
+        os.makedirs(out, exist_ok=True)
+        base = os.path.join(out, f"{stem}_idx{a.idx}_toklines")
     lines = row_lines(data[a.idx], tok, base)
     print(f"{len(lines)} row-lines -> {base}.txt / {base}.html")
     for l in lines[:4]:

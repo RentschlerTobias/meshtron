@@ -49,6 +49,34 @@ tokenizer, the model, the training loop, the mapping. They are written as
 `# %%` cells so they can be stepped through from an editor into a REPL. See
 `showcase/README.md`.
 
+## Inference: a geometry in, a CFD mesh out
+
+```
+uv run python scripts/infer.py \
+    --npz data/hex3d_algohex/batch/machine_0034_n2000/sample.npz \
+    --ckpt data/grpo_cart_step300.pt --blocks 12 --k 8
+```
+
+The whole chain from the geometry alone -- labelled surface, conditioning point
+cloud, generated blocking, snapping, edge routing, transfinite fill -- writing
+one VTK per stage (`01_geometry` .. `05_cfd_refill`) plus a `report.json` that
+carries every number of every stage. Every other entry point starts from
+something pre-computed; this one starts where a new machine does.
+
+`--blocks` is an input, not a derived quantity: the block count conditions the
+model and the geometry does not carry it. `--blocks-sweep 12,16,20` tries
+several and keeps the best mesh.
+
+On four held-out geometries (the val split of the family tokens, so geometries
+the model never trained on), at h=0.08 with 4 rollouts each:
+
+| geometry | blocks | cells | watertight | boundary max | inverted |
+|---|---|---|---|---|---|
+| machine_0034_n2000 | 12 | 12660 | yes | 2.4e-10 | 1.30% |
+| machine_0005_n2000 | 22 | 12165 | yes | 8.5e-11 | 1.59% |
+| machine_0026_n2000 | 12 | 11985 | yes | 7.7e-11 | 4.79% |
+| machine_0034_n8000 | 16 | 12390 | yes | 3.1e-10 | 2.62% |
+
 ## The two model families
 
 **3D block structures** — the active path. `GPTCond`
@@ -78,6 +106,11 @@ routed: along a feature curve where its ends sit on one, otherwise as a shortest
 path on the patch it belongs to -- which is why the blade footprint, being a
 hole in the hub patch, is walked *around* rather than cut through. Boundary face
 interiors are projected onto their patch, and Gordon-Hall fills the volume.
+
+The mapping itself lives in `meshtron/geometry/conform.py`, so the gate above
+and `scripts/infer.py` run the same code rather than two copies of it.
+`ConformOptions` documents which knobs are off by default because measurement
+said so.
 
 Batch it with `scripts/run_conform_batch.py`, and check a blocking before
 mapping it with `scripts/detect_block_tjunctions.py`.

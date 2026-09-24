@@ -31,7 +31,7 @@ from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
 from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from patch_paths import (PatchPaths, blend_chord_edges,  # noqa: E402
-                         make_face_projector, max_kink_deg)
+                         make_face_projector, max_kink_deg, snap_seam_path)
 from scripts.conform_gt_blocks import (_boundary_edge_pred,  # noqa: E402
                                         collapsed_faces)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
@@ -56,7 +56,13 @@ def run_one(name: str, args) -> dict:
                 "gate_pass": None}
     stats = {"routes": 0, "edges_surface_projected": 0,
              "edges_walked_multi_patch": 0}
-    seam_fn = _seam_path_fn(fm.seam_curves, records, stats, tol=args.seam_tol)
+    _seam_raw = _seam_path_fn(fm.seam_curves, records, stats, tol=args.seam_tol)
+
+    def seam_fn(p0, p1, n):
+        res = _seam_raw(p0, p1, n)
+        if res is None:
+            return None
+        return snap_seam_path(fm.seam_curves, fm, res[0]), res[1]
     geo = PatchPaths(fm, records=records, stats=stats,
                      is_boundary=_boundary_edge_pred(fm.blocks, C_snap),
                      clearance=args.blade_clearance,

@@ -500,3 +500,25 @@ def make_face_projector(pp: "PatchPaths", stats: dict | None = None):
         return out
 
     return fn
+
+
+def snap_seam_path(seam, fm, R: np.ndarray) -> np.ndarray:
+    """Pull a seam-routed path back onto the feature curve and the surface.
+
+    The seam navigator returns a resampled path that is neither on the seam
+    polyline nor on the npz surface (measured 4.9e-03 on machine_0387_n8000).
+    Seam polyline VERTICES lie exactly on the surface, but some segments are
+    long chords across it, so snapping to the polyline alone is not enough:
+    snap to the seam first (keeps the edge on the label boundary), then project
+    onto the surface (removes the residual chord error). Endpoints stay put --
+    they are the welded block corners.
+    """
+    R = np.asarray(R, float).copy()
+    if len(R) < 3:
+        return R
+    inner = R[1:-1]
+    _, _, _, ps = seam.nearest(inner)
+    ps = np.asarray(ps, float)
+    d, _, proj = fm.surface_nearest(ps, k=32)
+    R[1:-1] = proj
+    return R

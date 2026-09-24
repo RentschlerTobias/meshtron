@@ -61,7 +61,7 @@ from geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 from patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
                          blend_chord_edges, make_face_projector,
-                         max_kink_deg, write_debug_vtk)
+                         max_kink_deg, snap_seam_path, write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -373,6 +373,10 @@ def main() -> int:
                          "path cannot cross the blade footprint, so edges run "
                          "AROUND the blade; no arc/chord guard. Writes "
                          "<prefix>_geodesic_edges.vtk + _routing.json")
+    ap.add_argument("--no-seam-snap", action="store_true",
+                    help="keep the seam navigator's raw path instead of "
+                         "snapping it back onto the seam polyline and the npz "
+                         "surface (measured 4.9e-03 off both).")
     ap.add_argument("--allow-collapsed", action="store_true",
                     help="attempt samples with collapsed block faces; they "
                          "normally fail in refill_curved with "
@@ -439,7 +443,13 @@ def main() -> int:
 
     route_stats = {"routes": 0, "edges_surface_projected": 0,
                    "edges_walked_multi_patch": 0}
-    seam_fn = _seam_path_fn(seam, records, route_stats, tol=args.seam_tol)
+    _seam_raw = _seam_path_fn(seam, records, route_stats, tol=args.seam_tol)
+
+    def seam_fn(p0, p1, n):
+        res = _seam_raw(p0, p1, n)
+        if res is None or args.no_seam_snap:
+            return res
+        return snap_seam_path(seam, fm, res[0]), res[1]
     surf_fn = (_surface_path_fn(fm, route_stats, records=records)
                if args.surface_project else None)
     is_bnd = _boundary_edge_pred(fm.blocks, C_snap)

@@ -49,6 +49,8 @@ from geometry_features import FeatureModelV2  # noqa: E402
 from patch_paths import (PatchPaths, make_boundary_face_test,  # noqa: E402
                          make_face_projector, snap_seam_path)
 from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
+from scipy.spatial import cKDTree  # noqa: E402
+
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 BATCH = os.path.join(ROOT, "data", "hex3d_algohex", "batch")
@@ -110,6 +112,38 @@ def _read_parts(path):
     s = next(k for k, l in enumerate(L) if l.startswith("SCALARS"))
     part = np.array([int(float(L[s + 2 + k])) for k in range(m)])
     return P, cells, part
+
+
+def coverage(mesh_path, SP, ST, SL):
+    """How far each npz triangle is from the nearest mesh boundary point.
+
+    The boundary distance says every boundary point sits ON the geometry; it
+    does not say the geometry is COVERED. A blocking that fails to wrap the
+    blade scores perfectly on the first and badly on this one.
+    """
+    with open(mesh_path) as fh:
+        L = fh.read().split("\n")
+    i = next(k for k, l in enumerate(L) if l.startswith("POINTS"))
+    n = int(L[i].split()[1])
+    P = np.array([[float(x) for x in L[i + 1 + k].split()] for k in range(n)])
+    j = next(k for k, l in enumerate(L) if l.startswith("CELLS"))
+    m = int(L[j].split()[1])
+    H = np.array([[int(x) for x in L[j + 1 + k].split()][1:] for k in range(m)])
+    faces = ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5),
+             (2, 3, 7, 6), (3, 0, 4, 7))
+    cnt = {}
+    for c in H:
+        for f in faces:
+            k = tuple(sorted(int(c[x]) for x in f))
+            cnt[k] = cnt.get(k, 0) + 1
+    bp = np.unique([x for k, v in cnt.items() if v == 1 for x in k])
+    d, _ = cKDTree(P[bp]).query(SP[ST].mean(axis=1))
+    out = {}
+    for lab in np.unique(SL):
+        sl = d[SL == lab]
+        out[int(lab)] = (float(np.percentile(sl, 50)), float(sl.max()),
+                         int((sl > 0.15).sum()), int(len(sl)))
+    return out
 
 
 def main() -> int:
@@ -290,6 +324,14 @@ def main() -> int:
                      f"generated blocks through the same pipeline as stage 07 "
                      f"({rep8['cells_after']} cells, h={args.target_h})"))
 
+    cov = {}
+    SP = np.asarray(z["surface_points"], float)
+    ST = np.asarray(z["surface_tris"], np.int64)
+    SL = np.asarray(z["surface_tri_label"], np.int64)
+    for f, _d in made:
+        if f.startswith(("07_", "08_")):
+            cov[f] = coverage(os.path.join(out, f), SP, ST, SL)
+
     with open(os.path.join(out, "README.md"), "w") as fh:
         fh.write(f"# Pipeline stages, {name}\n\n")
         fh.write("Load in numeric order; each file is one stage of the "
@@ -298,6 +340,19 @@ def main() -> int:
             fh.write(f"- `{f}` -- {d}\n")
         fh.write("\nColouring: 01 by `patch_label`, 02 by `color` (gmsh "
                  "entity tag), 04 to 08 by `block_id`.\n")
+        if cov:
+            fh.write("\n## Geometry coverage\n\n")
+            fh.write("Distance from each npz triangle to the nearest mesh "
+                     "boundary point. The boundary error says every boundary "
+                     "point sits ON the geometry; this says whether the "
+                     "geometry is COVERED.\n\n")
+            for f, per in cov.items():
+                fh.write(f"\n`{f}`\n\n")
+                fh.write("| patch | n | p50 | max | uncovered (>0.15) |\n")
+                fh.write("|---|---|---|---|---|\n")
+                for lab, (p50, mx, far, n) in sorted(per.items()):
+                    fh.write(f"| {LABELS.get(lab, lab)} | {n} | {p50:.4f} | "
+                             f"{mx:.4f} | {far} |\n")
         fh.write("\nStage 0 is the parametric definition (30 `cV_ru` values "
                  "in params.json) and has no renderable form here. Stages 01 "
                  "and 02 are two views of the same thing: the surface is the "

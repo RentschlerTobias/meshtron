@@ -34,14 +34,14 @@ import torch
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import conditioning  # noqa: E402
-from block_mapping import SnapConfigV2, score_candidate, snap_corners_v2, tier_counts  # noqa: E402
-from curved_bridge import chord_baseline, refill_curved  # noqa: E402
-from generate import detokenize_safe, generate  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
-from mesh_validation import validate_generated_mesh  # noqa: E402
-from seam_graph import SeamNavigator  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, score_candidate, snap_corners_v2, tier_counts  # noqa: E402
+from meshtron.geometry.curved_bridge import chord_baseline, refill_curved  # noqa: E402
+from meshtron.training.generate import detokenize_safe, generate  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
+from meshtron.geometry.mesh_validation import validate_generated_mesh  # noqa: E402
+from meshtron.geometry.seam_graph import SeamNavigator  # noqa: E402
 from scripts.compare_viz import _to_cart, _write_compare_vtk, _write_parts_vtk  # noqa: E402
 from scripts.eval_family import load_model  # noqa: E402
 from scripts.snap_selftest import _arc_targets  # noqa: E402

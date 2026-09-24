@@ -36,8 +36,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from curved_bridge import refill_curved  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 
 BATCH = os.path.join(ROOT, "data", "hex3d_algohex", "batch")
 HEX_FACES = ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5),

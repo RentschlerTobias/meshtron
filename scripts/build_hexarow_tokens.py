@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402 (repo-root on sys.path)
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402 (repo-root on sys.path)
 
 _DATA = None
 _TOK = None

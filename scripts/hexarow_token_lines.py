@@ -18,7 +18,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hexa_row_tokenizer import HexaRowTokenizer
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
 
 SP_NAMES = {}
 
@@ -36,7 +36,7 @@ def row_lines(mesh, tok, out_base):
     vp = mesh["vertices_polar"]
     blks = mesh["faces"].T.tolist()
     rows, emit = None, None
-    import hexa_row_tokenizer as hrt
+    from meshtron.data import hexa_row_tokenizer as hrt
     rows, emit = hrt.build_row_plan(blks, mesh["vertices_cartesian"],
                                     edges=mesh.get("edge_index"))
     vmap = {}  # (r,ts,tc,z) tokens -> label index

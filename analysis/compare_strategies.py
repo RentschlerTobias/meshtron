@@ -26,8 +26,8 @@ from pathlib import Path
 
 import torch
 
-from config import PipelineConfig
-from trainer import Trainer
+from meshtron.training.config import PipelineConfig
+from meshtron.training.trainer import Trainer
 
 
 def parse_args() -> argparse.Namespace:

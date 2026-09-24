@@ -28,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",

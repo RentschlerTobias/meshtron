@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tokenizer_v2 import Tokenizer2D
+from meshtron.data.tokenizer_v2 import Tokenizer2D
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon, FancyBboxPatch

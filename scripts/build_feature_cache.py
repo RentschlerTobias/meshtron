@@ -27,7 +27,7 @@ sys.path.insert(0, ROOT)
 def _worker(job: tuple[str, str]) -> dict:
     npz, cache_dir = job
     try:
-        from geometry_features import FeatureModelV2
+        from meshtron.geometry.geometry_features import FeatureModelV2
         t0 = time.time()
         fm = FeatureModelV2(npz, cache_dir=cache_dir)
         import numpy as np

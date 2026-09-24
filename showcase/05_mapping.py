@@ -14,10 +14,10 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common as C  # noqa: E402
 
-from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
-from curved_bridge import refill_curved  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
                          max_kink_deg, snap_seam_path, write_debug_vtk)
 from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402

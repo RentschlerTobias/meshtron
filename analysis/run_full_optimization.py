@@ -29,9 +29,9 @@ import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 
-from config import PipelineConfig
-from metrics import EpochMetrics
-from trainer import Trainer
+from meshtron.training.config import PipelineConfig
+from meshtron.training.metrics import EpochMetrics
+from meshtron.training.trainer import Trainer
 
 
 def convert_optuna_params_to_config(params: dict) -> dict:

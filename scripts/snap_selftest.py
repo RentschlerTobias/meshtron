@@ -34,9 +34,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from block_mapping import SnapConfigV2, snap_corners_v2, tier_counts  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from seam_graph import build_graph, path_points, simple_paths  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2, tier_counts  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.seam_graph import build_graph, path_points, simple_paths  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 
 DEFAULT_NPZ = ROOT / "data" / "hex3d_algohex" / "batch" / "machine_0034_n2000" / "sample.npz"

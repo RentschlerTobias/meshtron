@@ -38,7 +38,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from scripts.conform_gt_blocks import DEFAULT_NPZ, _read_vtk_mesh  # noqa: E402
 
 # 6 quad faces of a VTK hex (local corner ids)

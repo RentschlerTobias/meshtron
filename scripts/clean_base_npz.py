@@ -24,7 +24,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from domain_extractor_3d import to_cylindrical  # noqa: E402
+from meshtron.data.domain_extractor_3d import to_cylindrical  # noqa: E402
 
 
 def _proc_one(path_str):

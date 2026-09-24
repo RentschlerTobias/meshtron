@@ -36,10 +36,10 @@ if HEX3D not in sys.path:
 
 import clean_blocks as cb  # noqa: E402  (extern, read-only)
 
-from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
-from curved_bridge import refill_curved  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
                          max_kink_deg, snap_seam_path)
 from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
@@ -210,7 +210,7 @@ def main() -> int:
         kinds = [(1 if 0 <= int(st.edge_curve[k]) < 900000
                   else (2 if int(st.edge_curve[k]) >= 900000 else 0))
                  for k in st.edge_pts]
-        from patch_paths import write_debug_vtk
+        from meshtron.geometry.patch_paths import write_debug_vtk
         write_debug_vtk(edges, polys,
                         {"route_kind": kinds,
                          "max_kink_deg": [max_kink_deg(q) for q in polys]},

@@ -78,7 +78,7 @@ for k in sorted(sample):
 # build_cloud draws n_points from the surface in (r, theta, z), normalises them
 # into the training bounds and appends a blade flag. This is the model's only
 # view of the geometry.
-import conditioning  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
 
 C.head("[4] conditioning cloud")
 ck, cfg, coords, npt, rb, zb, model, max_len, _ = C.load_model()
@@ -100,7 +100,7 @@ C.write_points(os.path.join(C.outdir(), "12_cloud.vtk"), xyz,
 # %% [5] tokenisation
 # HexaRowTokenizer walks the blocks in a canonical order and emits, per corner,
 # npt quantised coordinates. Same structure in, same sequence out.
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
 
 C.head("[5] tokenizer")
 tok = HexaRowTokenizer(r_bounds=rb, z_bounds=zb)

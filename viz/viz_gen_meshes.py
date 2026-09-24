@@ -24,8 +24,8 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from polytron_tokenizer import PolytronTokenizer
-import polytron_vertex_model as vh
+from meshtron.data.polytron_tokenizer import PolytronTokenizer
+from meshtron.legacy import polytron_vertex_model as vh
 
 LAB_COLOR = {0: '#d62728', 1: '#ff7f0e', 2: '#7fb3d5'}
 

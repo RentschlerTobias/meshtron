@@ -35,7 +35,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, _TOOLS)
 
 from tokenizer_domain import DomainTokenizer
-from reconstruct_domain import reconstruct_blocked_mesh, reconstruct_domain
+from meshtron.legacy.reconstruct_domain import reconstruct_blocked_mesh, reconstruct_domain
 from transfinite_interpolation import Transfinite_Interpolation
 
 

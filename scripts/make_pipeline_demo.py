@@ -43,10 +43,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
-from curved_bridge import refill_curved  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from patch_paths import (PatchPaths, make_boundary_face_test,  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.patch_paths import (PatchPaths, make_boundary_face_test,  # noqa: E402
                          make_face_projector, snap_seam_path)
 from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
 from scipy.spatial import cKDTree  # noqa: E402

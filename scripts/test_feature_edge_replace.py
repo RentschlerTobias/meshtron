@@ -58,9 +58,9 @@ from scipy.spatial import cKDTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import curved_bridge  # noqa: E402
-from edge_curves import local_edges  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry import curved_bridge  # noqa: E402
+from meshtron.geometry.edge_curves import local_edges  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 
 HEX3D_REPO = curved_bridge.HEX3D_REPO

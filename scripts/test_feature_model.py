@@ -19,10 +19,10 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from block_mapping import snap_corners_v2, tier_counts  # noqa: E402
-from curved_bridge import chord_baseline, refill_curved  # noqa: E402
-from edge_curves import build_structures, emit_edge_records  # noqa: E402
-from geometry_features import FeatureModelV2, plane_fit_residual  # noqa: E402
+from meshtron.geometry.block_mapping import snap_corners_v2, tier_counts  # noqa: E402
+from meshtron.geometry.curved_bridge import chord_baseline, refill_curved  # noqa: E402
+from meshtron.geometry.edge_curves import build_structures, emit_edge_records  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2, plane_fit_residual  # noqa: E402
 
 NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
                    "machine_0034_n2000", "sample.npz")
@@ -46,7 +46,7 @@ def _cube_surface():
 
 
 def test_cube_has_twelve_seam_curves() -> None:
-    from curve_model import extract_seam_curves
+    from meshtron.geometry.curve_model import extract_seam_curves
     C, tris, labels = _cube_surface()
     cs = extract_seam_curves(C, tris, labels)
     assert cs.n_curves == 12, cs.n_curves

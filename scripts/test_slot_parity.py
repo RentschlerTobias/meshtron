@@ -26,8 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from hexa_row_tokenizer import HexaRowTokenizer
-from train_hexarow_full import _slot_ids, _unit_weights, batchify
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
+from meshtron.training.train_hexarow_full import _slot_ids, _unit_weights, batchify
 
 
 def _specials() -> set[int]:

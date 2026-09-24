@@ -17,3 +17,13 @@ quad_domain_data/
 data/hex3d_algohex/
 embeds3d/
 scripts/__pycache__/
+
+# Never commit: generated data, session state, handoffs, editor backups.
+# A `git add -A` during the package refactor swept 18424 data files, the .omo
+# session directory and ten HANDOFF notes into a commit; these rules make that
+# mistake impossible rather than merely discouraged.
+data/
+.omo/
+HANDOFF*.md
+*.bak
+graphify-out/

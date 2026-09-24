@@ -24,8 +24,8 @@ import numpy as np
 import torch
 
 from build_hexarow_tokens import bounds_from
-from conditioning import _normalize, build_cloud, split_by_geometry, surface_cloud
-from train_hexarow_full import sample_points
+from meshtron.data.conditioning import _normalize, build_cloud, split_by_geometry, surface_cloud
+from meshtron.training.train_hexarow_full import sample_points
 
 
 def _expect(failures: list[str], cond: bool, msg: str) -> None:

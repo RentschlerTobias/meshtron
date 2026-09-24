@@ -55,11 +55,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
-from curved_bridge import refill_curved  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
-from patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
+from meshtron.geometry.patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
                          blend_chord_edges, make_boundary_face_test,
                          make_face_projector, max_kink_deg, snap_seam_path,
                          write_debug_vtk)
@@ -441,7 +441,7 @@ def main() -> int:
     nb = int(C.shape[0])
 
     C_snap, records = snap_corners_v2(target, C, SnapConfigV2())
-    import curved_bridge  # noqa: F401  (inserts the hex3d path for tfi)
+    from meshtron.geometry import curved_bridge  # noqa: F401  (inserts the hex3d path for tfi)
     curved_bridge._load()
     n_coll = collapsed_faces(fm.blocks, C_snap)
     if n_coll and not args.allow_collapsed:

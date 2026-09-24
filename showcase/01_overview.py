@@ -40,7 +40,7 @@ for lab, n in zip(labels, counts):
 # Not the mesh, not the geometry: a fixed number of points drawn from the
 # surface, in (r, theta, z) plus a blade flag, normalised into the bounds the
 # model was trained with.
-import conditioning  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
 
 src = torch.load(C.SRC, weights_only=False)
 sample = next(s for s in src["samples"] if s["name"] == C.MACHINE)
@@ -125,10 +125,10 @@ else:
 # %% [7] map a blocking onto the geometry
 # Corners snap to features, edges are routed along seams or as geodesics on
 # their patch, boundary faces are projected. Script 05 opens this up.
-from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
-from curved_bridge import refill_curved  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.patch_paths import (PatchPaths, make_face_projector,  # noqa: E402
                          snap_seam_path)
 from scripts.conform_gt_blocks import _boundary_edge_pred  # noqa: E402
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402

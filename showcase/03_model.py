@@ -42,7 +42,7 @@ print("   head.weight is tok.weight:",
 # The cloud goes through a per-point MLP, then attention pooling onto n_latent
 # learned queries, then a mean. The block count goes through a small MLP. Both
 # are summed into ONE vector per sample.
-import conditioning  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
 
 C.head("[2] conditioning")
 src = torch.load(C.SRC, weights_only=False)
@@ -115,8 +115,8 @@ print(f"   changed the last token: last position moved {d_last:.4f}, "
 # Generation is not free: at each position only certain token ids are legal --
 # a coordinate slot, a separator, the stop id. slot_mask encodes that, and it is
 # the reason the model cannot emit a syntactically broken sequence.
-from generate import slot_mask  # noqa: E402
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
+from meshtron.training.generate import slot_mask  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
 
 C.head("[6] slot mask")
 tok = HexaRowTokenizer(r_bounds=rb, z_bounds=zb)
@@ -157,7 +157,7 @@ print(f"   sampled {choice} with p={p[choice]:.4f}, "
 # than quadratic in the sequence length.
 import inspect  # noqa: E402
 
-from generate import forward_cached  # noqa: E402
+from meshtron.training.generate import forward_cached  # noqa: E402
 
 C.head("[8] cached forward")
 print(inspect.getsource(forward_cached))

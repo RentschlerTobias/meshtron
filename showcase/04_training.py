@@ -15,7 +15,7 @@ import torch.nn.functional as F
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common as C  # noqa: E402
 
-import train_hexarow_full as T  # noqa: E402
+from meshtron.training import train_hexarow_full as T  # noqa: E402
 
 ck, cfg, coords, npt, rb, zb, model, max_len, _ = C.load_model()
 tokens_file = torch.load(C.TOKENS, weights_only=False)
@@ -44,7 +44,7 @@ for bi, b in enumerate(batches):
 # batchify wants the conditioning cloud on each item, so attach it first -- the
 # trainer does the same, drawing a fresh cloud every epoch so the model never
 # sees the exact same sampling twice.
-import conditioning  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
 
 C.head("[2] batchify")
 src = torch.load(C.SRC, weights_only=False)

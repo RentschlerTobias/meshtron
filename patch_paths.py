@@ -455,7 +455,8 @@ def blend_chord_edges(st, corner_ids: np.ndarray, C_snap: np.ndarray,
     return done
 
 
-def make_face_projector(pp: "PatchPaths", stats: dict | None = None):
+def make_face_projector(pp: "PatchPaths", stats: dict | None = None,
+                        relax_iters: int = 200):
     """face_project_fn for refill_curved: pull a boundary face onto its patch.
 
     Only the INTERIOR of the face grid moves; the four edge rows stay as the
@@ -463,6 +464,14 @@ def make_face_projector(pp: "PatchPaths", stats: dict | None = None):
     stays watertight.  The patch is chosen from the labels the four corners
     agree on; when that is ambiguous, the majority label of the projected
     interior decides (restricted to the corner candidates when possible).
+
+    Plain nearest-point projection moves the grid points LATERALLY, which
+    bunches up the face parametrisation and folds the first cell layer behind
+    the wall: measured 2 -> 595 inverted cells on machine_0252_n8000 with the
+    boundary quads themselves barely changing (aspect p99 3.0 -> 3.1). After
+    projecting, `relax_iters` sweeps of a surface-constrained Laplacian
+    redistribute the interior points on the patch, with the four edge rows held
+    fixed. Set relax_iters=0 for the raw projection.
     """
     fm = pp.fm
 
@@ -491,6 +500,12 @@ def make_face_projector(pp: "PatchPaths", stats: dict | None = None):
         _, proj = patch.project(inner)
         out = np.array(G, float, copy=True)
         out[1:-1, 1:-1] = proj.reshape(G.shape[0] - 2, G.shape[1] - 2, 3)
+        for _ in range(int(relax_iters)):
+            lap = 0.25 * (out[:-2, 1:-1] + out[2:, 1:-1]
+                          + out[1:-1, :-2] + out[1:-1, 2:])
+            out[1:-1, 1:-1] = 0.5 * out[1:-1, 1:-1] + 0.5 * lap
+            _, q = patch.project(out[1:-1, 1:-1].reshape(-1, 3))
+            out[1:-1, 1:-1] = q.reshape(G.shape[0] - 2, G.shape[1] - 2, 3)
         if stats is not None:
             stats["faces_projected"] = stats.get("faces_projected", 0) + 1
             stats.setdefault("faces_projected_labels", {})
@@ -522,3 +537,60 @@ def snap_seam_path(seam, fm, R: np.ndarray) -> np.ndarray:
     d, _, proj = fm.surface_nearest(ps, k=32)
     R[1:-1] = proj
     return R
+
+
+def make_boundary_face_test(fm, surface_points=None, surface_tris=None,
+                            delta_frac: float = 0.25, seed: int = 0):
+    """is_boundary_face(ids, G) -> bool for refill_curved.
+
+    A block face owned by a single block is not necessarily on the domain
+    boundary: where two blocks touch across only part of a side (a T-junction),
+    both sides are recorded with one owner each while lying INSIDE the domain.
+    Offset the face grid's centre to both sides along its normal and ray cast
+    against the closed npz surface -- a real boundary face has exactly one side
+    inside, an interior wall has both.
+
+    `delta_frac` is the offset as a fraction of the face's shorter side, so the
+    test scales with the block rather than with the mesh.
+    """
+    P = np.asarray(fm.surface_points if surface_points is None
+                   else surface_points, float)
+    T = np.asarray(fm.surface_tris if surface_tris is None
+                   else surface_tris, np.int64)
+    rng = np.random.default_rng(seed)
+    d = rng.normal(size=3)
+    d /= np.linalg.norm(d)
+    v0, v1, v2 = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
+    e1, e2 = v1 - v0, v2 - v0
+    hcr = np.cross(d, e2)
+    a = np.einsum('ij,ij->i', e1, hcr)
+    ok = np.abs(a) > 1e-12
+    inv = np.zeros_like(a)
+    inv[ok] = 1.0 / a[ok]
+
+    def _inside(q):
+        sv = q[None] - v0
+        u = np.einsum('ij,ij->i', sv, hcr) * inv
+        qv = np.cross(sv, e1)
+        v = (qv @ d) * inv
+        t = np.einsum('ij,ij->i', qv, e2) * inv
+        hit = ok & (u >= 0) & (u <= 1) & (v >= 0) & (u + v <= 1) & (t > 1e-9)
+        return bool(hit.sum() % 2 == 1)
+
+    def fn(ids, G) -> bool:
+        G = np.asarray(G, float)
+        ni, nj = G.shape[0], G.shape[1]
+        c = G[ni // 2, nj // 2]
+        du = G[-1, nj // 2] - G[0, nj // 2]
+        dv = G[ni // 2, -1] - G[ni // 2, 0]
+        n = np.cross(du, dv)
+        ln = np.linalg.norm(n)
+        if ln < 1e-15:
+            return True
+        n = n / ln
+        delta = delta_frac * min(np.linalg.norm(du), np.linalg.norm(dv))
+        if delta <= 1e-12:
+            return True
+        return _inside(c + delta * n) != _inside(c - delta * n)
+
+    return fn

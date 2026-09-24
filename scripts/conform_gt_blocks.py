@@ -60,8 +60,9 @@ from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 from patch_paths import (BLEND_ID_BASE, PatchPaths,  # noqa: E402
-                         blend_chord_edges, make_face_projector,
-                         max_kink_deg, snap_seam_path, write_debug_vtk)
+                         blend_chord_edges, make_boundary_face_test,
+                         make_face_projector, max_kink_deg, snap_seam_path,
+                         write_debug_vtk)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 
 DEFAULT_NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
@@ -373,6 +374,12 @@ def main() -> int:
                          "path cannot cross the blade footprint, so edges run "
                          "AROUND the blade; no arc/chord guard. Writes "
                          "<prefix>_geodesic_edges.vtk + _routing.json")
+    ap.add_argument("--trust-single-owner", action="store_true",
+                    help="treat every block face with one owner as domain "
+                         "boundary. 17%% of the corpus carries block-level "
+                         "T-junctions whose interfaces look exactly like that "
+                         "while lying inside the domain; the default rejects "
+                         "them by ray casting.")
     ap.add_argument("--no-seam-snap", action="store_true",
                     help="keep the seam navigator's raw path instead of "
                          "snapping it back onto the seam polyline and the npz "
@@ -508,7 +515,9 @@ def main() -> int:
     curved_path = prefix + "_refill.vtk"
     rep = refill_curved(C_snap, args.target_h, curved_path, fm=target,
                         path_fn=path_fn, edge_post_fn=edge_post_fn,
-                        face_project_fn=face_fn)
+                        face_project_fn=face_fn,
+                        is_boundary_face=(None if args.trust_single_owner
+                                          else make_boundary_face_test(fm)))
 
     # Boundary conformity tripwire on the exported mesh.
     import export_vtk  # noqa: E402  (curved_bridge inserted the path)
@@ -613,6 +622,8 @@ def main() -> int:
         "multi_patch_walk": {
             "enabled": bool(args.surface_project),
             "edges": int(route_stats["edges_walked_multi_patch"])},
+        "single_owner_faces_rejected": int(
+            rep.get("single_owner_faces_rejected", 0)),
         "project_faces": {
             "enabled": bool(args.project_faces),
             "faces": int(route_stats.get("faces_projected", 0)),

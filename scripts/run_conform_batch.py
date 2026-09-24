@@ -31,7 +31,8 @@ from block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
 from curved_bridge import refill_curved  # noqa: E402
 from geometry_features import FeatureModelV2  # noqa: E402
 from patch_paths import (PatchPaths, blend_chord_edges,  # noqa: E402
-                         make_face_projector, max_kink_deg, snap_seam_path)
+                         make_boundary_face_test, make_face_projector,
+                         max_kink_deg, snap_seam_path)
 from scripts.conform_gt_blocks import (_boundary_edge_pred,  # noqa: E402
                                         collapsed_faces)
 from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
@@ -84,7 +85,9 @@ def run_one(name: str, args) -> dict:
         write_edges=False,
         edge_post_fn=edge_post,
         face_project_fn=(make_face_projector(geo, stats)
-                         if args.project_faces else None))
+                         if args.project_faces else None),
+        is_boundary_face=make_boundary_face_test(fm))
+    rejected = int(rep.get("single_owner_faces_rejected", 0))
     bids = rep.pop("boundary_point_ids")
     rep.pop("boundary_quads", None)
     pts = _read_points(out_vtk)
@@ -104,6 +107,7 @@ def run_one(name: str, args) -> dict:
         "geodesic": int(stats.get("edges_geodesic", 0)),
         "blended": int(stats.get("edges_blended", 0)),
         "faces_projected": int(stats.get("faces_projected", 0)),
+        "single_owner_faces_rejected": rejected,
         "max_kink_deg": float(max(kinks)),
         "kink_edges_over_20deg": int(sum(1 for k in kinks if k > 20.0)),
         "seconds": round(time.time() - t0, 1),

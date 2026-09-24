@@ -93,7 +93,8 @@ def _block_curved_mesh(tfi, r, dims, H, C_snap, st, pts_of,
 def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
                   blocks: np.ndarray | None = None, fm=None,
                   write_edges: bool = True, path_fn=None,
-                  edge_post_fn=None, face_project_fn=None) -> dict:
+                  edge_post_fn=None, face_project_fn=None,
+                  is_boundary_face=None) -> dict:
     """(nb,8,3) gesnappte Ecken (+ Kurvenmodell `fm`) -> CFD-VTK, Kurven-TFI.
 
     `path_fn(p0, p1, n) -> (pts, curve_id) | None` forwards the seam-graph
@@ -127,6 +128,14 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
     # one block bounds the domain.  Deriving it from the fine mesh instead is
     # unreliable where cells fold -- collapsed points there make interior
     # facets look like boundary facets.
+    #
+    # One owner is NECESSARY but not sufficient: where two blocks touch across
+    # only part of a side (a T-junction, present in 17% of the corpus), the
+    # four-corner face format cannot express the interface, so both sides are
+    # recorded with one owner each while lying INSIDE the domain. Projecting
+    # those onto the geometry drags interior walls outward. `is_boundary_face`
+    # (ids, grid) -> bool lets the caller reject them; without it the old
+    # behaviour is kept.
     face_owners: dict = {}
     for r in range(nb):
         for axis in (0, 1, 2):
@@ -135,6 +144,22 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
                 face_owners[key] = face_owners.get(key, 0) + 1
 
     bnd_faces = {k for k, v in face_owners.items() if v == 1}
+    interior_single = 0
+    if is_boundary_face is not None:
+        keep = set()
+        for r in range(nb):
+            for axis in (0, 1, 2):
+                for side in (0, 1):
+                    ids = [int(H[r, c]) for c in face_cycle(axis, side)]
+                    key = frozenset(ids)
+                    if key not in bnd_faces or key in keep:
+                        continue
+                    G, cids = st.faces[key]
+                    if is_boundary_face(ids, G):
+                        keep.add(key)
+        interior_single = len(bnd_faces) - len(keep)
+        bnd_faces = keep
+    report["single_owner_faces_rejected"] = int(interior_single)
 
     chunks, cells, bid, bnd_ids, bnd_quads = [], [], [], [], []
     pts_of = {int(H[r, c]): C[r, c] for r in range(nb) for c in range(8)}
@@ -147,7 +172,7 @@ def refill_curved(C_snap: np.ndarray, target_h: float, out_vtk: str,
         for axis in (0, 1, 2):
             for side in (0, 1):
                 key = frozenset(int(H[r, c]) for c in face_cycle(axis, side))
-                if face_owners[key] != 1:
+                if key not in bnd_faces:
                     continue
                 sl = [slice(None)] * 3
                 sl[axis] = 0 if side == 0 else -1

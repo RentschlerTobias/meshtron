@@ -40,8 +40,14 @@ from meshtron.training.train_hexarow_full import GPTCond
 
 
 def load_model(ckpt, dev):
-    """GPTCond exakt wie generate.py.main aus dem CKPT (keine CLI-Raten)."""
-    ck = torch.load(ckpt, weights_only=False)
+    """GPTCond exakt wie generate.py.main aus dem CKPT (keine CLI-Raten).
+
+    map_location=dev: a checkpoint saved from CUDA otherwise refuses to load on
+    a CPU-only machine, or when the GPU is busy, with "Attempting to
+    deserialize object on a CUDA device". The tensors are moved to dev anyway
+    a few lines down, so this only removes a failure mode.
+    """
+    ck = torch.load(ckpt, weights_only=False, map_location=dev)
     cfg = ck["cfg"]
     coords = (ck.get("coords")
               or (cfg.get("coords") if isinstance(cfg, dict) else None) or "polar")

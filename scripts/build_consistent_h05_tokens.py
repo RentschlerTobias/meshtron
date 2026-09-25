@@ -30,8 +30,8 @@ sys.path.insert(0, ROOT)
 import numpy as np
 import torch
 
-from hexa_row_tokenizer import DegenerateBlockError, HexaRowTokenizer
-from mesh_validation import validate_generated_mesh
+from meshtron.data.hexa_row_tokenizer import DegenerateBlockError, HexaRowTokenizer
+from meshtron.geometry.mesh_validation import validate_generated_mesh
 
 
 def validate_tokens(tok: HexaRowTokenizer, tokens, expected_blocks: int):

@@ -30,8 +30,8 @@ import numpy as np
 import torch
 
 from build_hexarow_tokens import bounds_from
-from conditioning import point_is_blade, polar_from_xyz, split_by_geometry
-from hexa_row_tokenizer import HexaRowTokenizer
+from meshtron.data.conditioning import point_is_blade, polar_from_xyz, split_by_geometry
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
 
 DATA = os.path.join(ROOT, "data", "hex3d_algohex")
 SEL_JSON = os.path.join(ROOT, "data", "family_selection.json")

@@ -20,8 +20,8 @@ sys.path.insert(0, ROOT)
 import numpy as np
 import torch
 
-from hexa_row_tokenizer import HexaRowTokenizer
-from rewards_hexarow import (HexaRowRewardConfig, chamfer_symmetric,
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
+from meshtron.training.rewards_hexarow import (HexaRowRewardConfig, chamfer_symmetric,
                              make_hexarow_reward)
 
 CKPT = os.path.join(ROOT, "data", "hexarow_sft_cart_ep584.pt")

@@ -25,7 +25,7 @@ sys.path.insert(0, _HERE)
 import torch
 from tqdm import tqdm
 
-from domain_extractor import extract_mesh_data
+from meshtron.data.domain_extractor import extract_mesh_data
 
 
 def main():

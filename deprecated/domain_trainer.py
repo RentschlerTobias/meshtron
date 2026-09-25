@@ -24,14 +24,14 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-from config import DomainTrainingConfig
+from meshtron.training.config import DomainTrainingConfig
 from dataset_domain import DomainMeshData
-from logger import JSONLLogger
+from meshtron.training.logger import JSONLLogger
 from meshtron_domain import MeshtronDomain
-from metrics import EpochMetrics, TokenLossAccumulator
-from objectives import TeacherForcingObjective
-from policy import Policy
-from reproducibility import dataloader_generator, set_seed, worker_init_fn
+from meshtron.training.metrics import EpochMetrics, TokenLossAccumulator
+from meshtron.training.objectives import TeacherForcingObjective
+from meshtron.training.policy import Policy
+from meshtron.training.reproducibility import dataloader_generator, set_seed, worker_init_fn
 from tokenizer_domain import DomainTokenizer
 
 

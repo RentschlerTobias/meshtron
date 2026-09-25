@@ -32,16 +32,22 @@ sys.path.insert(0, ROOT)
 import numpy as np
 import torch
 
-from conditioning import build_cloud
-from generate import detokenize_safe, generate
-from hexa_row_tokenizer import HexaRowTokenizer
-from mesh_validation import hex_min_jacobian, validate_generated_mesh
-from train_hexarow_full import GPTCond
+from meshtron.data.conditioning import build_cloud
+from meshtron.training.generate import detokenize_safe, generate
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
+from meshtron.geometry.mesh_validation import hex_min_jacobian, validate_generated_mesh
+from meshtron.training.train_hexarow_full import GPTCond
 
 
 def load_model(ckpt, dev):
-    """GPTCond exakt wie generate.py.main aus dem CKPT (keine CLI-Raten)."""
-    ck = torch.load(ckpt, weights_only=False)
+    """GPTCond exakt wie generate.py.main aus dem CKPT (keine CLI-Raten).
+
+    map_location=dev: a checkpoint saved from CUDA otherwise refuses to load on
+    a CPU-only machine, or when the GPU is busy, with "Attempting to
+    deserialize object on a CUDA device". The tensors are moved to dev anyway
+    a few lines down, so this only removes a failure mode.
+    """
+    ck = torch.load(ckpt, weights_only=False, map_location=dev)
     cfg = ck["cfg"]
     coords = (ck.get("coords")
               or (cfg.get("coords") if isinstance(cfg, dict) else None) or "polar")

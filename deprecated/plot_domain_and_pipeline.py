@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from tokenizer_domain import DomainTokenizer
-from reconstruct_domain import (reconstruct_blocked_mesh, reconstruct_domain,
+from meshtron.legacy.reconstruct_domain import (reconstruct_blocked_mesh, reconstruct_domain,
                                 reconstruct_domain_coons)
 
 # Daten laden
@@ -145,7 +145,7 @@ places = output['vertex_places']
 faces_as_places = output['faces_as_places']
 
 # Reconstruct cartesian from detokenized polar
-from reconstruct_domain import polar_to_cartesian, merge_duplicate_vertices
+from meshtron.legacy.reconstruct_domain import polar_to_cartesian, merge_duplicate_vertices
 cartesian = polar_to_cartesian(places, center)
 unique_verts, place_to_unique = merge_duplicate_vertices(cartesian, threshold=1e-3)
 

@@ -12,8 +12,8 @@ if str(ROOT) not in sys.path:
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-import conditioning  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from scripts.eval_family import load_model  # noqa: E402
 from scripts.map_generated_blocks import _resolve_item  # noqa: E402
 

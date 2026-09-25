@@ -23,9 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch
 import torch.nn as nn
 from typing import Tuple, Dict
-from hourglass_transformer import HourglassTransformer
-from point_encoder import PerceiverPointEncoder
-from faceCount_encoder import FaceCountEncoder
+from meshtron.model.hourglass_transformer import HourglassTransformer
+from meshtron.model.point_encoder import PerceiverPointEncoder
+from meshtron.model.faceCount_encoder import FaceCountEncoder
 from domain_embedding import DomainEmbedding
 
 

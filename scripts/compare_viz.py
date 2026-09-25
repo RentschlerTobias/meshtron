@@ -34,16 +34,16 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import conditioning  # noqa: E402
-from generate import (  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
+from meshtron.training.generate import (  # noqa: E402
     detokenize_safe,
     generate,
     load_sample,
     mesh_to_polar,
     sample_points,
 )
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
-from mesh_validation import validate_generated_mesh  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
+from meshtron.geometry.mesh_validation import validate_generated_mesh  # noqa: E402
 from scripts.eval_family import load_model  # noqa: E402
 
 LEGACY_SEQ = "data/seq_overfit_polar.pt"

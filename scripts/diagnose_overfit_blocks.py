@@ -27,8 +27,8 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from generate import detokenize_safe  # noqa: E402
-from hexa_row_tokenizer import HexaRowTokenizer, build_row_plan  # noqa: E402
+from meshtron.training.generate import detokenize_safe  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer, build_row_plan  # noqa: E402
 
 SRC = ROOT / "data" / "polytron_data_3d_smoke.pt"
 REPORT = ROOT / "reports" / "overfit_block_diagnosis.md"

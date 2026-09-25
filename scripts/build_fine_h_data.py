@@ -42,12 +42,12 @@ if str(ROOT) not in sys.path:
 
 from scipy.spatial import cKDTree  # noqa: E402
 
-import curved_bridge  # noqa: E402
-import edge_curves  # noqa: E402
-from conditioning import point_is_band, point_is_blade  # noqa: E402
-from domain_extractor_3d import (per_face_dir_class, subsample_points,  # noqa: E402
+from meshtron.geometry import curved_bridge  # noqa: E402
+from meshtron.geometry import edge_curves  # noqa: E402
+from meshtron.data.conditioning import point_is_band, point_is_blade  # noqa: E402
+from meshtron.data.domain_extractor_3d import (per_face_dir_class, subsample_points,  # noqa: E402
                                  to_cylindrical)
-from geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 
 DEFAULT_OUT_POLY = ROOT / "data" / "fine" / "polytron_data_3d_h05_from_batch.pt"
 DEFAULT_OUT_QUAD = ROOT / "data" / "fine" / "quadtron_data_3d_h05_from_batch.pt"
@@ -61,7 +61,7 @@ _SELFTEST_SURF = 12539
 
 def _build_edges(h: np.ndarray) -> np.ndarray:
     """Hex boundary surface faces [Q,4] (faces belonging to exactly one cell)."""
-    from hexa_row_tokenizer import _HEX_FACE_Q
+    from meshtron.data.hexa_row_tokenizer import _HEX_FACE_Q
     local = np.asarray(_HEX_FACE_Q, dtype=np.int64)          # [6,4]
     allf = h[:, local].reshape(-1, 4)                        # [6N,4]
     key = np.sort(allf, axis=1)

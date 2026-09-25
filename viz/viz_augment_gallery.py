@@ -22,7 +22,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from augment_subdivide import build_subdivided_mesh
+from meshtron.data.augment_subdivide import build_subdivided_mesh
 
 
 def draw_filled(ax, d):

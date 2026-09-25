@@ -16,11 +16,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402 (repo-root on sys.path)
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402 (repo-root on sys.path)
 
 _DATA = None
 _TOK = None
 _COORDS = 'polar'  # fork-global: _proc_one liest hier; main() setzt vor Pool-Start
+_GRAN = 'row'   # fork-global: Tokenizer-Granularitaet ('row'|'block'|'face')
+_EOE = False    # fork-global: End-of-Element-Token (sep2) je Element emittieren
 _FAMILY = False  # fork-global: Konditionierungsfelder je Item einbetten
 _DIR_PREFIX = "batch"  # fork-global: Praefix fuer item["dir"]
 _GEOMS = {}  # fork-global: name -> geom_id aus --geom-ids
@@ -43,7 +45,7 @@ def bounds_from(data, pad=0.02):
 def _proc_one(i):
     s = _DATA[i]
     try:
-        ids = _TOK.tokenize(s, coords=_COORDS)
+        ids = _TOK.tokenize(s, coords=_COORDS, granularity=_GRAN, eoe=_EOE)
     except Exception as e:
         return i, None, f"SKIP sample {i} ({s.get('name', '?')}): {type(e).__name__}: {e}"
     lv = s.get("subdiv_n", None)
@@ -80,6 +82,26 @@ def main():
     ap.add_argument("--coords", choices=("polar", "cart"), default="polar",
                     help="Vertex-Token-Koordinaten: polar (4/Vert) oder cart (3/Vert); "
                          "cart braucht vertices_cartesian im Sample")
+    ap.add_argument("--granularity", choices=("row", "block", "face"),
+                    default="row",
+                    help="row: Head 8 Verts + Exit-Ring-Fortsetzung, EOR (sep) "
+                         "nach jeder Row -- was jede bisherige Tokendatei "
+                         "verwendet. block: wie row, zusaetzlich EOE (sep2) "
+                         "nach jedem Block, falls --eoe. face: alle 6 Quads je "
+                         "Block ohne Dedup, EOE je Quad falls --eoe. Das EOR "
+                         "ist in ALLEN Varianten vorhanden; es traegt die "
+                         "Grammatik, weil der erste Block einer Row 8 Verts "
+                         "hat und jeder folgende nur 4.")
+    ap.add_argument("--eoe", action="store_true",
+                    help="End-of-Element-Token (sep2) nach jedem Element der "
+                         "gewaehlten Granularitaet. In keinem bisherigen "
+                         "Datensatz enthalten und von keinem Reward gelesen: "
+                         "train_grpo.py verteilt Credit ueber --credit "
+                         "uniform|sep, beides kennt nur das EOR. Die Marke ist "
+                         "die Voraussetzung fuer einen Credit je Block bzw. je "
+                         "Quad, nicht selbst schon einer. (Das RL-Curriculum "
+                         "in meshtron/training/rewards.py ist der 2D-Quadtron-"
+                         "Pfad und hat mit sep2 nichts zu tun.)")
     ap.add_argument("--family", action="store_true",
                     help="Konditionierungsfelder (dir/surface_points/is_blade/"
                          "is_band/geom_id/coords) je Item einbetten")
@@ -90,8 +112,10 @@ def main():
                     help="JSON name->geom_id; '_meta' wird ignoriert")
     args = ap.parse_args()
 
-    global _DATA, _TOK, _COORDS, _FAMILY, _DIR_PREFIX, _GEOMS
+    global _DATA, _TOK, _COORDS, _FAMILY, _DIR_PREFIX, _GEOMS, _GRAN, _EOE
     _COORDS = args.coords
+    _GRAN = args.granularity
+    _EOE = bool(args.eoe)
     _FAMILY = bool(args.family)
     _DIR_PREFIX = args.dir_prefix
     _DATA = torch.load(args.src, weights_only=False)

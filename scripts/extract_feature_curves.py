@@ -36,7 +36,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from curve_model import extract_seam_curves  # noqa: E402
+from meshtron.geometry.curve_model import extract_seam_curves  # noqa: E402
 from scripts.compare_viz import _write_parts_vtk  # noqa: E402
 
 DP3D_REPO = Path("/home/t1dde/hydrostack_pipeline/stack/domain_partition_3D")
@@ -165,7 +165,7 @@ def main() -> int:
         cs, names = curves_from_npz(args.npz)
         stem = args.npz.parent.name
         if args.overlay_gt_edges:
-            from curve_model import block_edge_curves
+            from meshtron.geometry.curve_model import block_edge_curves
             z = np.load(args.npz)
             overlay = block_edge_curves(z["edges"], z["edge_polyline"],
                                         z["edge_polyline_offset"])

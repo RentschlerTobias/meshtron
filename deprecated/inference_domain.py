@@ -24,12 +24,12 @@ _HERE = Path(os.path.dirname(os.path.abspath(__file__)))
 import torch
 import numpy as np
 
-import plotting_tools
-from config import DomainTrainingConfig
+from meshtron.viz import plotting_tools
+from meshtron.training.config import DomainTrainingConfig
 from dataset_domain import DomainMeshData
 from meshtron_domain import MeshtronDomain
-from policy import Policy
-from reconstruct_domain import reconstruct_domain
+from meshtron.training.policy import Policy
+from meshtron.legacy.reconstruct_domain import reconstruct_domain
 from tokenizer_domain import DomainTokenizer
 
 

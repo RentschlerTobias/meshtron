@@ -19,14 +19,14 @@ import torch
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import conditioning  # noqa: E402
-from block_mapping import (SnapConfigV2, score_candidate,  # noqa: E402
+from meshtron.data import conditioning  # noqa: E402
+from meshtron.geometry.block_mapping import (SnapConfigV2, score_candidate,  # noqa: E402
                            snap_corners_v2)
-from generate import detokenize_safe, generate  # noqa: E402
-from geometry_features import FeatureModelV2  # noqa: E402
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
-from mesh_validation import validate_generated_mesh  # noqa: E402
-from seam_graph import ep_clusters  # noqa: E402
+from meshtron.training.generate import detokenize_safe, generate  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
+from meshtron.geometry.mesh_validation import validate_generated_mesh  # noqa: E402
+from meshtron.geometry.seam_graph import ep_clusters  # noqa: E402
 from scripts.compare_viz import _to_cart  # noqa: E402
 from scripts.map_generated_blocks import _resolve_item  # noqa: E402
 from scripts.eval_family import load_model  # noqa: E402

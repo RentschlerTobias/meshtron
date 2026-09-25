@@ -24,7 +24,7 @@ import torch
 
 from build_family_tokens import load_sample
 from diagnose_overfit_blocks import emit_consistency
-from hexa_row_tokenizer import HexaRowTokenizer, roundtrip
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer, roundtrip
 
 
 def _expect(failures: list[str], cond: bool, msg: str) -> None:

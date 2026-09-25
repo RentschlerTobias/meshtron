@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
 
-from polytron_tokenizer import PolytronTokenizer
+from meshtron.data.polytron_tokenizer import PolytronTokenizer
 
 OUT = "figures/twostage"
 os.makedirs(OUT, exist_ok=True)

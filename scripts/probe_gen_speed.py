@@ -44,11 +44,11 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
-from conditioning import build_cloud  # noqa: E402
+from meshtron.data.conditioning import build_cloud  # noqa: E402
 from eval_family import load_model  # noqa: E402
-import generate as gen_mod  # noqa: E402
-from generate import forward_cached, slot_mask  # noqa: E402
-from hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
+from meshtron.training import generate as gen_mod  # noqa: E402
+from meshtron.training.generate import forward_cached, slot_mask  # noqa: E402
+from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
 
 
 def _specials(tok: HexaRowTokenizer) -> set[int]:

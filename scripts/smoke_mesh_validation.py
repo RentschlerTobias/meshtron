@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from mesh_validation import validate_generated_mesh
+from meshtron.geometry.mesh_validation import validate_generated_mesh
 
 
 def cube() -> tuple[np.ndarray, np.ndarray]:

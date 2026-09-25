@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import argparse
 from dataclasses import replace
 
-from config import DomainTrainingConfig
+from meshtron.training.config import DomainTrainingConfig
 from domain_trainer import DomainTrainer
 
 

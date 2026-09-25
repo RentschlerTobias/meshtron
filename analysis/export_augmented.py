@@ -20,7 +20,7 @@ import argparse
 import time
 import torch
 
-from augment_subdivide import build_subdivided_mesh
+from meshtron.data.augment_subdivide import build_subdivided_mesh
 
 
 def main():

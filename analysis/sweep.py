@@ -28,9 +28,9 @@ import optuna
 from optuna.pruners import HyperbandPruner, MedianPruner, NopPruner
 from optuna.samplers import TPESampler
 
-from config import PipelineConfig
-from metrics import EpochMetrics
-from trainer import Trainer
+from meshtron.training.config import PipelineConfig
+from meshtron.training.metrics import EpochMetrics
+from meshtron.training.trainer import Trainer
 
 
 # ---------------------------------------------------------------- objectives

@@ -12,7 +12,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from block_mapping import FeatureModel, SnapConfig, score_candidate, tier_counts  # noqa: E402
+from meshtron.geometry.block_mapping import FeatureModel, SnapConfig, score_candidate, tier_counts  # noqa: E402
 
 NPZ = os.path.join(ROOT, "data", "hex3d_algohex", "batch",
                    "machine_0034_n2000", "sample.npz")

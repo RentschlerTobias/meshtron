@@ -28,8 +28,8 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-from polytron_tokenizer import PolytronTokenizer
-from augment_subdivide import build_subdivided_mesh
+from meshtron.data.polytron_tokenizer import PolytronTokenizer
+from meshtron.data.augment_subdivide import build_subdivided_mesh
 
 LAB_COLOR = {0: '#d62728', 1: '#ff7f0e', 2: '#7fb3d5'}
 LAB_NAME = {0: 'Label 0: Ecke/Singularitaet', 1: 'Label 1: Rand', 2: 'Label 2: Feld'}

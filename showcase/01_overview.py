@@ -54,7 +54,7 @@ for lab, n in zip(labels, counts):
 
 # %% [2] the conditioning cloud the transformer is given
 # Not the mesh, not the geometry: a fixed number of points drawn from the
-# surface, in (r, theta, z) plus a blade flag, normalised into the bounds the
+# surface, in (r, sin(theta), cos(theta), z), normalised into the bounds the
 # model was trained with.
 from meshtron.data import conditioning  # noqa: E402
 
@@ -69,11 +69,12 @@ cloud = cloud[0] if isinstance(cloud, tuple) else cloud
 C.head("[2] conditioning cloud")
 C.show("cloud", cloud, 3)
 print(f"   r bounds {rb}   z bounds {zb}   coords {coords}")
+xyz = C.cloud_to_xyz(cloud, rb, zb)
 C.write_points(
     os.path.join(C.OUT, "02_cloud.vtk"),
-    cloud,
-    {"blade_flag": cloud[:, 3]},
-    "conditioning cloud",
+    xyz,
+    {"r_norm": cloud[:, 0], "z_norm": cloud[:, 3]},
+    "conditioning cloud, back in xyz",
 )
 
 # %% [3] the ground-truth block structure

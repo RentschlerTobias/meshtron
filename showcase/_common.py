@@ -4,6 +4,7 @@ Nothing here is part of the pipeline -- it only loads things, prints them in a
 readable shape and writes VTK, so the walkthrough scripts stay about the
 pipeline itself.
 """
+
 from __future__ import annotations
 
 import os
@@ -15,8 +16,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-HEX3D = ("/home/t1dde/hydrostack_pipeline/stack/domain_partition_3D/"
-         "experimentell/hex3d_algohex")
+HEX3D = (
+    "/home/t1dde/hydrostack_pipeline/stack/domain_partition_3D/"
+    "experimentell/hex3d_algohex"
+)
 if HEX3D not in sys.path:
     sys.path.insert(0, HEX3D)
 
@@ -38,8 +41,15 @@ TOKENS = os.path.join(DATA, "hexarow_batch_tokens.pt")
 SRC = os.path.join(DATA, "polytron_batch_clean.pt")
 SLOT_TRAINED = False
 
-PATCHES = {1: "inlet", 2: "outlet", 3: "periodic", 4: "periodic",
-           5: "hub", 6: "shroud", 7: "blade hull"}
+PATCHES = {
+    1: "inlet",
+    2: "outlet",
+    3: "periodic",
+    4: "periodic",
+    5: "hub",
+    6: "shroud",
+    7: "blade hull",
+}
 
 
 def head(title: str) -> None:
@@ -52,24 +62,29 @@ def head(title: str) -> None:
 def show(name, obj, n: int = 3) -> None:
     """One line about an array, tensor, list or dict -- shape, dtype, range."""
     import torch
+
     if torch.is_tensor(obj):
         a = obj.detach().cpu().numpy()
         kind = "tensor"
     elif isinstance(obj, np.ndarray):
         a, kind = obj, "array"
     elif isinstance(obj, dict):
-        print(f"{name:28s} dict, {len(obj)} keys: "
-              f"{sorted(map(str, obj))[:6]}")
+        print(f"{name:28s} dict, {len(obj)} keys: {sorted(map(str, obj))[:6]}")
         return
     elif isinstance(obj, (list, tuple)):
-        print(f"{name:28s} {type(obj).__name__}, {len(obj)} entries, "
-              f"first: {str(obj[0])[:44] if obj else '-'}")
+        print(
+            f"{name:28s} {type(obj).__name__}, {len(obj)} entries, "
+            f"first: {str(obj[0])[:44] if obj else '-'}"
+        )
         return
     else:
         print(f"{name:28s} {type(obj).__name__}  {str(obj)[:48]}")
         return
-    rng = (f"  [{a.min():.4g} .. {a.max():.4g}]"
-           if a.size and np.issubdtype(a.dtype, np.number) else "")
+    rng = (
+        f"  [{a.min():.4g} .. {a.max():.4g}]"
+        if a.size and np.issubdtype(a.dtype, np.number)
+        else ""
+    )
     print(f"{name:28s} {kind} {str(tuple(a.shape)):18s} {str(a.dtype):9s}{rng}")
     if a.ndim <= 2 and a.size and n:
         flat = a[:n] if a.ndim == 1 else a[:n]
@@ -140,10 +155,19 @@ def write_points(path, P, arrays=None, title="showcase points"):
 def load_model(device="cpu"):
     """The trained GPTCond exactly as generation loads it."""
     from scripts.eval_family import load_model as _lm
+
     return _lm(CKPT, device)
+
+
+def cloud_to_xyz(cloud, rb, zb):
+    """Model-space cloud (r', sin, cos, z') back to xyz in machine coordinates
+    (inverse of _normalize in meshtron.data.conditioning)."""
+    r = cloud[:, 0] * (rb[1] - rb[0]) + rb[0]
+    z = cloud[:, 3] * (zb[1] - zb[0]) + zb[0]
+    return np.stack([r * cloud[:, 2], r * cloud[:, 1], z], axis=-1)
 
 
 def scaled_jacobians(P, H):
     import clean_blocks as cb
-    return cb.scaled_jacobians(np.asarray(P, float), np.asarray(H, int))
 
+    return cb.scaled_jacobians(np.asarray(P, float), np.asarray(H, int))

@@ -90,8 +90,8 @@ for k in sorted(sample):
 
 # %% [4] the conditioning cloud
 # build_cloud draws n_points from the surface in (r, theta, z), normalises them
-# into the training bounds and appends a blade flag. This is the model's only
-# view of the geometry.
+# into the training bounds and encodes the angle as a sin/cos pair. This is the
+# model's only view of the geometry.
 from meshtron.data import conditioning  # noqa: E402
 
 C.head("[4] conditioning cloud")
@@ -103,10 +103,7 @@ C.show("cloud", cloud, 4)
 print("   columns are (r', sin(theta), cos(theta), z') -- the angle enters as a"
       "\n   sin/cos pair so the seam at +-pi is not a jump, and r and z are"
       "\n   normalised into the bounds stored in the checkpoint.")
-xyz = np.stack([cloud[:, 0] * (rb[1] - rb[0]) + rb[0], cloud[:, 1],
-                cloud[:, 3] * (zb[1] - zb[0]) + zb[0]], axis=-1)
-xyz = np.stack([xyz[:, 0] * cloud[:, 2], xyz[:, 0] * cloud[:, 1], xyz[:, 2]],
-               axis=-1)
+xyz = C.cloud_to_xyz(cloud, rb, zb)
 C.write_points(os.path.join(C.outdir(), "12_cloud.vtk"), xyz,
                {"r_norm": cloud[:, 0], "z_norm": cloud[:, 3]},
                "conditioning cloud, back in xyz")

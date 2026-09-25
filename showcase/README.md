@@ -1,6 +1,6 @@
 # Showcase — walking through meshtron
 
-Five scripts that take the repo apart in the order it actually runs. They are
+Six scripts that take the repo apart in the order it actually runs. They are
 written as `# %%` cells so they can be sent line by line or cell by cell to a
 Python REPL from neovim (iron.nvim, vim-slime, …), or run straight through:
 
@@ -61,6 +61,7 @@ map you hold while reading the others.
 | `03_model.py` | the module tree, the conditioning path from cloud to one FiLM vector, a forward pass with the residual stream per layer, causality checked by experiment, the structural mask that constrains sampling, one sampling step, the KV cache |
 | `04_training.py` | batching by token budget, what `batchify` returns, why the slot id exists, the weighted loss, the hardest positions, one optimiser step with gradient norms per module, the learning-rate schedule |
 | `05_mapping.py` | the feature model and its seam curves, snapping corners, routing one edge with its candidates, all 84 edges by kind, and the three different quality questions a mapped mesh has to answer |
+| `06_pipeline.py` | the inference chain live, the middle ground 01 skips: the RL checkpoint samples from the npz conditioning cloud, the generated rolls are validated, the best one is snapped and refilled by TFI -- run on `machine_0034_n2000` like 01, so outputs can be compared (`08`-`11`) |
 
 ## Things worth knowing before you start
 
@@ -96,6 +97,16 @@ data/showcase/12_cloud.vtk            the cloud back in xyz (02)
 data/showcase/15_mapped.vtk           mapped mesh (05)
 data/showcase/16_edges.vtk            routed edges, colour by `route_kind` (05)
 data/showcase/17_mapped_gtcurve.vtk   same corners, own edge curves (05)
+```
+
+`06_pipeline.py` writes its own set, so its run can be compared cell by cell
+against machine_0034_n2000 artifacts of `01`:
+
+```
+data/showcase/08_geometry.vtk         labelled surface (06)
+data/showcase/09_cloud.vtk            conditioning cloud, from the npz (06)
+data/showcase/10_blocks_generated.vtk generated blocking, snapped (06)
+data/showcase/11_cfd_refill.vtk       mapped CFD mesh from the generated blocks (06)
 ```
 
 ## Generating and comparing, from the command line

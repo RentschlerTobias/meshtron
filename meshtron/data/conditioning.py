@@ -1,22 +1,22 @@
-"""Conditioning-Bausteine fuer HexaRow 3D (geteilt von Training und Inferenz).
+"""Conditioning building blocks for HexaRow 3D (shared by training and inference).
 
-Eine einzige Wahrheitsquelle fuer Punktwolken-Erzeugung und Geometrie-Split:
-  - build_cloud: Oberflaechenpunkte -> normalisierte [n,4]-Wolke
-    (r, sin, cos, z), optional Blade-oversampled (x3).
-  - split_by_geometry: 90/10-Split mit GEOM-LEVEL-Disjunktheit.
+Single source of truth for point-cloud generation and geometry split:
+  - build_cloud: surface points -> normalized [n,4] cloud (r, sin, cos, z),
+    optional blade oversampling (x3).
+  - split_by_geometry: 90/10 split with GEOMETRY-LEVEL disjointness.
 
-Paritaet: build_cloud(..., weights=None) erzeugt bit-identisch das, was
-train_hexarow_full.sample_points(surface_cloud(raw), ...) erzeugt. Gewichtung
-ist ein ADDITIVER Output (Default weights=None -> altes Verhalten unveraendert).
-Das schliesst die Drift-Klasse "Train- und Inferenz-Wolke unterscheiden sich"
-strukturell aus.
+Parity: build_cloud(..., weights=None) produces bit-identically what
+train_hexarow_full.sample_points(surface_cloud(raw), ...) produces. Weighting
+is an ADDITIVE output (default weights=None -> old behavior unchanged).
+This structurally excludes the drift class "training and inference clouds
+differ".
 """
 from __future__ import annotations
 
 import numpy as np
 
-# tet_prep.py Label-Mapping: 1=hub, 2=shroud, 3=inlet, 4=outlet, 5=blade,
-# 6=periodic_A, 7=periodic_B. Label 5 in realer sample.npz verifiziert.
+# tet_prep.py label mapping: 1=hub, 2=shroud, 3=inlet, 4=outlet, 5=blade,
+# 6=periodic_A, 7=periodic_B. Label 5 verified in the real sample.npz.
 BLADE_LABEL = 5
 
 # O-grid cut band surface around the blade row (npz surface label verified:
@@ -33,8 +33,8 @@ def polar_from_xyz(p: np.ndarray) -> np.ndarray:
 
 
 def surface_cloud(raw: dict) -> np.ndarray:
-    """Konditionierungs-Quelle [M,3] polar (r,theta,z): komplette Geometrie aus
-    surface_points (xyz), Fallback vertices_polar. Identisch zu
+    """Conditioning source [M,3] polar (r,theta,z): complete geometry from
+    surface_points (xyz), fallback vertices_polar. Identical to
     train_hexarow_full.surface_cloud."""
     sp = raw.get("surface_points")
     if sp is not None:
@@ -48,8 +48,8 @@ def surface_cloud(raw: dict) -> np.ndarray:
 
 def point_is_blade(n_points: int, tris: np.ndarray, tri_label: np.ndarray,
                    blade_label: int = BLADE_LABEL) -> np.ndarray:
-    """Per-Punkt-Blade-Flag: Punkt ist Blade, wenn er an einem Blade-Triangle
-    (label==blade_label) haengt. tris [T,3] Indizes in surface_points."""
+    """Per-point blade flag: a point is blade if it hangs on a blade triangle
+    (label==blade_label). tris [T,3] indices into surface_points."""
     mask = np.zeros(int(n_points), dtype=bool)
     tris = np.asarray(tris, dtype=np.int64)
     sel = np.asarray(tri_label) == blade_label
@@ -71,7 +71,7 @@ def point_is_band(n_points: int, tris: np.ndarray, tri_label: np.ndarray,
 
 
 def _normalize(p: np.ndarray, rb: tuple, zb: tuple) -> np.ndarray:
-    """(r,theta,z) -> [n,4] (r', sin, cos, z'); Spaltenreihenfolge wie
+    """(r,theta,z) -> [n,4] (r', sin, cos, z'); column order as in
     train_hexarow_full.sample_points."""
     r = (p[:, 0] - rb[0]) / max(1e-9, rb[1] - rb[0])
     z = (p[:, 2] - zb[0]) / max(1e-9, zb[1] - zb[0])
@@ -81,13 +81,13 @@ def _normalize(p: np.ndarray, rb: tuple, zb: tuple) -> np.ndarray:
 def build_cloud(sample: dict, n_points: int, rb: tuple, zb: tuple, rng,
                 blade_weight: float | None = None,
                 band_weight: float | None = None):
-    """Punktwolke [n,4] aus dem Sample. weights=None -> bit-identisch zu
-    sample_points(surface_cloud(sample), ...); sonst Blade-Punkte mit
-    blade_weight (z.B. 3.0) oversampled, zweiter Output = is_blade-Maske der
-    gezogenen Punkte. Ohne is_blade im Sample -> uniform (kein Oversample).
-    band_weight (opt-in, Generation only) oversamples the O-grid band points
-    compositionally: band points keep their blade_weight and gain an extra
-    band_weight factor; requires is_band in sample."""
+    """Point cloud [n,4] from the sample. weights=None -> bit-identical to
+    sample_points(surface_cloud(sample), ...); otherwise blade points are
+    oversampled with blade_weight (e.g. 3.0), second output = is_blade mask of
+    the drawn points. Without is_blade in the sample -> uniform (no
+    oversampling). band_weight (opt-in, generation only) oversamples the
+    O-grid band points compositionally: band points keep their blade_weight
+    and gain an extra band_weight factor; requires is_band in sample."""
     vp = surface_cloud(sample)
     is_blade = sample.get("is_blade")
     is_band = sample.get("is_band")
@@ -106,8 +106,8 @@ def build_cloud(sample: dict, n_points: int, rb: tuple, zb: tuple, rng,
 
 def split_by_geometry(items: list[dict], val_frac: float = 0.1,
                       seed: int = 0) -> tuple[list[dict], list[dict]]:
-    """Geometrie-disjunkter Split: identische geom_id nie auf beiden Seiten.
-    Geometrien sortiert, dann geshuffelt (seed) -> deterministisch."""
+    """Geometry-disjoint split: identical geom_id never on both sides.
+    Geometries sorted, then shuffled (seed) -> deterministic."""
     geoms = sorted({it["geom_id"] for it in items})
     if len(geoms) <= 1:
         return list(items), list(items)

@@ -1,11 +1,11 @@
 # AGENT.md
 
-Guide for Claude Code (claude.ai/code) in this repo.
+Guide for AI Agent in this repo.
 
 ## What
 
 Autoregressive gen model for **2D quad meshes**. Adapts NVIDIA MeshTron paper
-(`literatur/2412.09548v1.pdf`, https://arxiv.org/html/2412.09548v1) from 3D tri → 2D quad.
+(`literatur/2412.09548v1.pdf`, <https://arxiv.org/html/2412.09548v1>) from 3D tri → 2D quad.
 Mesh → token seq, predict token-by-token. Conditioned on point cloud + target face count.
 
 ## Commands
@@ -25,11 +25,13 @@ Deps (install manual): `torch`, `torch_geometric` (only `lexsort`), `numpy`, `ma
 HPC: `queuing.sh` = PBS job, activates venv, runs `main.py`.
 
 ### Data
+
 Lives **outside repo**: `../data/*.pt` (e.g. `structured_quad_meshes_pre_selected.pt`), via `torch.load`.
 Each = PyG mesh object: `mesh.x` (vert coords, use `[:, 0:2]`), `mesh.faces` (`[4, n_quads]`),
 `mesh.tri_coordinates` (`[N, 3]`; col 2 = boundary/interior flag, `2` = interior). Files not provided.
 
 ### Checkpoints
+
 `checkpoints/<notation>/epoch_N.pt`. `<notation>` encodes all hyperparams
 (`q_..._d_model_..._n_latents_..._stage_layers_4_4_4_4_4`). `checkpoints/` gitignored.
 `validation.py` + `testing.py` parse hyperparams back out of dir name → naming in `Trainer.notation`

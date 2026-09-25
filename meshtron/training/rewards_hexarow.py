@@ -35,6 +35,11 @@ semantics (the ``r_valid_share`` CSV column uses them); when valid, the full
   total = w_count*r_count + w_quality*r_quality + w_conform*r_conform
           + w_full_valid*(1 if valid else 0) - w_trim*(1 if trim else 0)
 
+Every scored rollout also carries ``block_scores``: the min-Jacobian of each
+detokenized block in emission order (head block first, one entry per
+4-vertex continuation), for train_grpo's per-block advantage option
+(--adv row).
+
 ``w_valid`` is retained only for positional-config backwards compatibility and
 is UNUSED (folded into ``w_full_valid``).
 
@@ -76,9 +81,14 @@ class RewardTerms:
     r_conform: float
     total: float
     valid: bool
+    # Per-BLOCK min-Jacobian in generator emission order: block 0 = row head
+    # (8 verts), every later block = one 4-vert exit-group. Rows may contain
+    # many blocks sharing faces, so this is NOT one entry per row. Empty for
+    # hard-invalid rollouts. Feeds --adv row's per-block group advantage.
+    block_scores: tuple[float, ...] = ()
 
 
-_INVALID = RewardTerms(0.0, 0.0, 0.0, 0.0, False)
+_INVALID = RewardTerms(0.0, 0.0, 0.0, 0.0, False, ())
 
 
 def block_count_reward(gen_blocks: int, gt_blocks: int) -> float:
@@ -158,6 +168,7 @@ def _score(token_ids: list, item: dict, tokenizer, cfg: HexaRowRewardConfig,
     r_quality = base - cfg.lam_fold * fold
     if oriented.size == 0:
         r_quality -= cfg.penalty_all_folded
+    block_scores = tuple(float(x) for x in jac) if blocks.size else ()
 
     # --- dense conform term (always, same chamfer path) ---------------------
     r_conform = 0.0
@@ -186,7 +197,8 @@ def _score(token_ids: list, item: dict, tokenizer, cfg: HexaRowRewardConfig,
     total = (cfg.w_count * r_count + cfg.w_quality * r_quality
              + cfg.w_conform * r_conform + cfg.w_full_valid * r_valid
              - cfg.w_trim * trim_pen)
-    return RewardTerms(r_valid, r_quality, r_conform, float(total), valid)
+    return RewardTerms(r_valid, r_quality, r_conform, float(total), valid,
+                       block_scores)
 
 
 def make_hexarow_reward(tokenizer, config: HexaRowRewardConfig | None = None,

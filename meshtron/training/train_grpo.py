@@ -1,21 +1,13 @@
-"""train_grpo.py — GRPO-Spike auf der SFT-Cart-Policy (P2-2).
+"""train_grpo.py -- GRPO on the SFT cart policy (P2-2).
 
-KL anchor: the k3 estimator by default (see --kl-estimator; the plain
-log-ratio mean this file started with is not a divergence and manufactured a
-gradient when the reward was flat).
-
-Gruppen-relativer Policy-Gradient (kein Critic) mit KL-Anker an eine
-eingefrorene SFT-Referenz. Rollouts via generate.generate (KV-Cache + slot-Mask,
-identischer Conditioning-Pfad conditioning.build_cloud blade_weight=3.0),
-Scoring ueber rewards_hexarow. Die eigenen Samples werden mit demselben
-own-slot-Forward wie im Decode re-gescored (token-level logp); PPO-Clip gegen
-den Rollout-logp, 1 inneres Epoch = on-policy.
-
-lr 5e-6 (~2 Groessenordnungen unter SFT 3e-4): RL-Gradienten sind um
-Gruppenmittel zentriert und stark verrauscht; die SFT-Rate wuerde die
-Policy in wenigen Steps kollabieren lassen. temp 1.0 (statt Eval 0.7) fuer
-mehr Explorationsvarianz innerhalb der Gruppe; beta 0.04 haelt die Policy
-nahe an SFT.
+Critic-free group-relative policy gradient with a KL anchor (k3 estimator,
+see --kl-estimator) to a frozen SFT copy. Rollouts via generate.generate
+(KV cache, slot mask, same conditioning path as training: build_cloud with
+blade_weight=3.0), scoring via rewards_hexarow; own samples re-scored with
+the same own-slot forward as in decode, PPO-clipped against the rollout
+logp -- one inner epoch, i.e. on-policy. lr 5e-6 and beta 0.04 keep the
+policy near SFT: RL gradients are group-centred and noisy, and the SFT rate
+would collapse the policy within a few steps.
 
   uv run python train_grpo.py --smoke
   uv run python train_grpo.py --steps 300 --G 8
@@ -71,6 +63,78 @@ def credit_weights(seq: list[int], specials: set, sep: int, mode: str,
         elif seq[1 + j] not in specials:
             cnt += 1
     return w
+
+
+def token_blocks(seq: list[int], specials: set, npt: int, sep: int) -> list[int]:
+    """Global BLOCK index of every TARGET token (targets = seq[1:]).
+
+    Row grammar: the first block of every row (after start or sep) emits
+    8 vertices (8*npt tokens); every further block in the same row emits only
+    its 4 exit-ring vertices (4*npt). Coordinates outside a complete group
+    (trailing partial group, sep/stop/end) get -1 -> fallback advantage."""
+    ids = []
+    b = 0
+    left = 8 * npt
+    for t in seq[1:]:
+        if t in specials:
+            ids.append(-1)
+            if t == sep:
+                b += 1
+                left = 8 * npt
+            continue
+        if left == 0:
+            b += 1
+            left = 4 * npt
+        ids.append(b)
+        left -= 1
+    return ids
+
+
+def block_group_advantage(rolls: list[list[int]], terms, scalar_adv: list[float],
+                          sep: int, specials: set, npt: int,
+                          scope: str = "dead") -> list[np.ndarray]:
+    """Group-relative advantage per BLOCK for one item's G rollouts.
+
+    Pools RewardTerms.block_scores across the group per global block index
+    (blocks are emitted in a shared order: head block, then one 4-vert
+    exit-group per block), normalizes each block against the group
+    (critic-free like GRPO itself). Tokens inherit their block's advantage;
+    positions without a block score (trailing partial groups after trim,
+    sep/stop/end, hard-invalid rollouts) fall back to the mesh-scalar
+    advantage.
+
+    scope='dead' (default) applies the per-block advantage ONLY when no rollout
+    in the group is valid -- a dead group has an ~identical mesh reward
+    (advantage ~0) yet its block min-Jacobians still order the rollouts, which
+    is the one place the mesh scalar carries no signal. Healthy groups (at
+    least one valid rollout) fall back to the plain mesh-scalar advantage:
+    once some rollout is valid the mesh reward already discriminates, and
+    spraying per-block noise over already-good groups (measured: validity
+    0.7981 -> 0.6859, p=0.003) destroys them. scope='all' restores that
+    (measured-bad) unrestricted behaviour."""
+    if scope == "dead" and any(t.valid for t in terms):
+        return [np.full(max(len(s) - 1, 0), a, dtype=np.float32)
+                for s, a in zip(rolls, scalar_adv)]
+    G = len(rolls)
+    n_b = max((len(t.block_scores) for t in terms), default=0)
+    if n_b == 0:
+        return [np.full(max(len(s) - 1, 0), a, dtype=np.float32)
+                for s, a in zip(rolls, scalar_adv)]
+    M = np.full((G, n_b), np.nan, dtype=np.float64)
+    for i, t in enumerate(terms):
+        M[i, :len(t.block_scores)] = t.block_scores
+    mu = np.nanmean(M, axis=0)
+    sd = np.nanstd(M, axis=0)
+    out = []
+    for i, s in enumerate(rolls):
+        a = np.empty(max(len(s) - 1, 0), dtype=np.float32)
+        for j, bid in enumerate(token_blocks(s, specials, npt, sep)):
+            if 0 <= bid < n_b and np.isfinite(M[i, bid]):
+                a[j] = (M[i, bid] - mu[bid]) / (sd[bid] + 1e-6)
+            else:
+                a[j] = scalar_adv[i]
+        out.append(a)
+    return out
 
 
 def rescore(model, seqs: list[list[int]], pc, fc, specials: set, npt: int,
@@ -129,6 +193,25 @@ def main() -> int:
                          "pushing the policy away from the reference. k3 gives "
                          "grad_norm 0.0 on the same input.")
     ap.add_argument("--credit", choices=["uniform", "sep"], default="uniform")
+    ap.add_argument("--adv", choices=["mesh", "row"], default="mesh",
+                    help="mesh: one scalar group advantage per rollout "
+                         "(previous behaviour). row: group-relative advantage "
+                         "(previous behaviour). row: group-relative advantage "
+                         "per BLOCK from RewardTerms.block_scores (per-block "
+                         "min-Jacobian in emission order: head block, then "
+                         "one 4-vert exit-group per block), so a group where "
+                         "every rollout fails validation still gets "
+                         "within-group signal from fewer-folded-cells "
+                         "rollouts; positions without a block score (trailing "
+                         "partial groups after trim, sep/stop/end, "
+                         "hard-invalid rollouts) fall back to the mesh-scalar "
+                         "advantage.")
+    ap.add_argument("--row-scope", choices=["dead", "all"], default="dead",
+                    help="row advantage only for groups with NO valid rollout "
+                         "(dead: default, targets the measured zero-signal "
+                         "groups without touching healthy ones) or for every "
+                         "group (all: the measured-bad unrestricted variant, "
+                         "validity 0.7981 -> 0.6859).")
     ap.add_argument("--decay", type=float, default=0.9)
     ap.add_argument("--log-csv", default="data/grpo_cart_log.csv")
     ap.add_argument("--ckpt-prefix", default="data/grpo_cart")
@@ -233,7 +316,7 @@ def main() -> int:
             batch.append(items[int(order[cursor])])
             cursor += 1
 
-        seqs, pcs, adv_all, stats = [], [], [], []
+        seqs, pcs, adv_all, adv_rows, stats = [], [], [], [], []
         for item in batch:
             pts, _ = build_cloud(item, cfg["n_points"], rb, zb, cloud_rng,
                                  blade_weight=3.0)
@@ -248,15 +331,27 @@ def main() -> int:
             R = torch.tensor([[t.total for t in terms]], device=dev)
             A = (R - R.mean(1, keepdim=True)) / (R.std(1, unbiased=False,
                                                        keepdim=True) + 1e-6)
+            adv_all.extend(A[0].tolist())
+            if args.adv == "row":
+                adv_rows.extend(block_group_advantage(
+                    rolls, terms, A[0].tolist(), core.sep_token, specials,
+                    npt, scope=args.row_scope))
             seqs.extend(rolls)
             pcs.append(pc.expand(len(rolls), -1, -1))
-            adv_all.extend(A[0].tolist())
             stats.extend(terms)
 
         pc_b = torch.cat(pcs, dim=0)
         fc_b = torch.tensor([float(it["blocks"]) for it in batch
                              for _ in range(args.G)], device=dev)
-        adv = torch.tensor(adv_all, dtype=torch.float32, device=dev)
+        Lt = max(len(s) for s in seqs) - 1
+        a_np = np.zeros((len(seqs), Lt), dtype=np.float32)
+        if args.adv == "row":
+            for i, a in enumerate(adv_rows):
+                a_np[i, :len(a)] = a
+        else:
+            for i, s in enumerate(seqs):
+                a_np[i, :len(s) - 1] = adv_all[i]
+        a_t = torch.as_tensor(a_np, device=dev)
         logp_new, mask, ent = rescore(policy, seqs, pc_b, fc_b, specials, npt,
                                       pad_id, dev, dtype, use_slot, grad=True)
         with torch.no_grad():
@@ -273,7 +368,6 @@ def main() -> int:
         denom = cw.sum()
 
         ratio = torch.exp(logp_new - logp_old)
-        a_t = adv[:, None]
         obj = torch.minimum(ratio * a_t,
                             torch.clamp(ratio, 1.0 - args.clip,
                                         1.0 + args.clip) * a_t)
@@ -306,7 +400,7 @@ def main() -> int:
                "entropy": round(ent, 5),
                "grad_norm": round(float(gnorm), 5),
                "loss": round(float(loss.detach()), 5),
-               "adv_mean": round(float(adv.mean()), 6),
+               "adv_mean": round(float(np.mean(adv_all)), 6),
                "peak_vram_gb": round(vram, 3)}
         writer.writerow(row)
         logf.flush()

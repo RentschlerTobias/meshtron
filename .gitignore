@@ -11,6 +11,8 @@ figures/
 *.db
 *.tar.xz
 *.tar.zst
+!docs/images/**
+!docs/images/
 quad_domain_data/
 .venv/
 .uv-cache/

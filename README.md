@@ -25,40 +25,33 @@ and the [decision doc](../domain_partition_3D/docs/decisions/2026-09-28-beam-col
 |---|---|---|---|---|---|
 | ![](../domain_partition_3D/docs/figures/hexmesh/01_geometry.png) | ![](../domain_partition_3D/docs/figures/hexmesh/02_algohex_hexmesh.png) | ![](../domain_partition_3D/docs/figures/hexmesh/03_greedy_12_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/04_greedy_22_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/05_greedy_75_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/06_beam_12_blocks.png) |
 
-**2 — Quadtron (2D quads on unwrapped surfaces).** The first-generation
-model: a transformer over quantised quad tokens on the unwrapped
-hub/shroud surface. Generation worked; the back-mapping of the linear
-blocks onto the curved geometry did not, which drove the move to the 3D
-path. The 2D partition itself (frame field, singularity graph, Xiao
-simplification, TFI with conforming cell counts) is the machinery that
-prediction feeds into. All panels are the hub surface of the tistos
-geometry, produced by `dp3d` in [`domain_partition_3D`](../domain_partition_3D).
+**2 — Quadtron (block tokens with linear edges).** The first-generation
+3D model: a transformer over quantised block tokens, conditioned on the
+point cloud. Generation worked — the tokens decode into valid coarse hex
+structures; the open problem was back-mapping the *linear* blocks onto the
+curved geometry, which is what drove the conform/mapping side
+(`scripts/conform_gt_blocks.py`, `scripts/map_generated_blocks.py`) and,
+eventually, the move to the 3D GPTCond path. The row shows one machine
+(machine_0034) end to end, using the dataset's block structure as the
+stand-in for a generated one — the models are trained on exactly these:
 
-| 3D surface | unwrapped | frame field: singularities | predicted quads (simplified) | TFI refill | tiled TFI |
-|---|---|---|---|---|---|
-| ![](docs/images/quadtron/01_3d_surface_hub.png) | ![](docs/images/quadtron/02_unwrapped_hub.png) | ![](docs/images/quadtron/03_singularity_graph.png) | ![](docs/images/quadtron/04_predicted_quads.png) | ![](docs/images/quadtron/05_tfi_refill.png) | ![](docs/images/quadtron/05b_tiled_refill.png) |
-
-The earliest 3D checkpoint (`hexarow_*`) predicted the linear blocks in
-one shot — generation worked, mapping them back onto the geometry did
-not, which is exactly the step that grew into the conform/mapping side
-(`scripts/conform_gt_blocks.py`, `00_history` panel against the cfd
-refill of the same geometry):
-
-**3 — Polytron (3D block structures, the active path).** A decoder-only
-transformer (GPTCond, 40 M params, GRPO-refined) over quantised block
-tokens, conditioned on the geometry's labelled-surface point cloud and
-the block count. Inference is the whole chain: geometry in, mapped
-blocking and CFD-grade transfinite refill out (`scripts/infer.py`,
-`python scripts/infer.py --npz data/hex3d_algohex/batch/machine_0034_n2000/sample.npz --ckpt data/grpo_cart_step300.pt --blocks 12 --k 8`).
-
-| geometry | conditioning cloud | generated blocking | blocking, mapped | CFD transfinite refill |
+| geometry | conditioning cloud | generated blocking (linear edges) | blocking with curves | TFI refill |
 |---|---|---|---|---|
-| ![](docs/images/polytron/01_geometry.png) | ![](docs/images/polytron/02_conditioning_cloud.png) | ![](docs/images/polytron/03_generated_blocking.png) | ![](docs/images/polytron/04_blocking_mapped.png) | ![](docs/images/polytron/05_cfd_refill.png) |
+| ![](docs/images/quadtron/01_geometry.png) | ![](docs/images/quadtron/02_pointcloud.png) | ![](docs/images/quadtron/03_generated_linear_blocking.png) | ![](docs/images/quadtron/04_blocking_with_curves.png) | ![](docs/images/quadtron/05_tfi_refill.png) |
 
-Panels: machine_0034 from a single `scripts/infer.py` run (57075 points,
-51936 cells, watertight, 1.07% inverted, boundary max deviation 2.5e-10).
+**3 — Polytron (3D block structures, the active path).** The same encoder
+over block tokens (GPTCond, 40 M parameters, GRPO-refined), trained on the
+3D beam-collapse block structures so the generated structure is already
+blockable onto the geometry. Inference is the whole chain — geometry in,
+mapped blocking and CFD-grade transfinite refill out:
+`scripts/infer.py --npz data/hex3d_algohex/batch/machine_0034_n2000/sample.npz
+--ckpt data/grpo_cart_step300.pt --blocks 12 --k 8` (51 936 cells,
+watertight, 1.07 % inverted, boundary deviation 2.5e-10). Same machine,
+the conformed block structure as the stand-in for a generated one:
 
-## Layout
+| geometry | conditioning cloud | generated blocking (curved) | TFI refill |
+|---|---|---|---|---|
+| ![](docs/images/polytron/01_geometry.png) | ![](docs/images/polytron/02_pointcloud.png) | ![](docs/images/polytron/03_generated_blocking_curved.png) | ![](docs/images/polytron/04_tfi_refill.png) |
 
 ## Layout
 

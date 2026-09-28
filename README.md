@@ -8,15 +8,57 @@ The block structure is the hard part: a coarse decomposition of the flow
 passage into curvilinear hexahedra whose faces follow the geometry. Once it
 exists, refining it into a mesh of any density is mechanical.
 
-```
-parametric geometry          30 cV_ru values per machine
-   -> gmsh                   tetrahedral volume mesh
-   -> labelled surface       7 patches: inlet, outlet, 2x periodic, hub, shroud, blade hull
-   -> conditioning cloud     what the transformer is given
-   -> transformer            a block structure, as a token sequence
-   -> mapping                corners snapped, edges routed, faces projected
-   -> transfinite refill     the CFD mesh
-```
+## The three pipelines at a glance
+
+Three model generations, one goal: the minimal block structure for a
+turbine passage, generated directly from the geometry.
+
+**1 — Hexamesh (the data source, [`domain_partition_3D`](../domain_partition_3D)).**
+AlgoHex produces a fine hex mesh and its sheet collapse produces the coarse
+block structure. The greedy cleanup was the weak point — the same geometry
+collapsed into 12, 22, or 75 blocks depending on which sheet fell first.
+The beam search over collapse orders (`beam_collapse.py`) always reaches
+the minimal topology; see the [hexamesh README row](../domain_partition_3D#the-pipeline-at-a-glance)
+and the [decision doc](../domain_partition_3D/docs/decisions/2026-09-28-beam-collapse-relabelling.md).
+
+| geometry | AlgoHex hex mesh | greedy: 12 | greedy: 22 | greedy: 75 | beam search: 12 |
+|---|---|---|---|---|---|
+| ![](../domain_partition_3D/docs/figures/hexmesh/01_geometry.png) | ![](../domain_partition_3D/docs/figures/hexmesh/02_algohex_hexmesh.png) | ![](../domain_partition_3D/docs/figures/hexmesh/03_greedy_12_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/04_greedy_22_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/05_greedy_75_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/06_beam_12_blocks.png) |
+
+**2 — Quadtron (2D quads on unwrapped surfaces).** The first-generation
+model: a transformer over quantised quad tokens on the unwrapped
+hub/shroud surface. Generation worked; the back-mapping of the linear
+blocks onto the curved geometry did not, which drove the move to the 3D
+path. The 2D partition itself (frame field, singularity graph, Xiao
+simplification, TFI with conforming cell counts) is the machinery that
+prediction feeds into. All panels are the hub surface of the tistos
+geometry, produced by `dp3d` in [`domain_partition_3D`](../domain_partition_3D).
+
+| 3D surface | unwrapped | frame field: singularities | predicted quads (simplified) | TFI refill | tiled TFI |
+|---|---|---|---|---|---|
+| ![](docs/images/quadtron/01_3d_surface_hub.png) | ![](docs/images/quadtron/02_unwrapped_hub.png) | ![](docs/images/quadtron/03_singularity_graph.png) | ![](docs/images/quadtron/04_predicted_quads.png) | ![](docs/images/quadtron/05_tfi_refill.png) | ![](docs/images/quadtron/05b_tiled_refill.png) |
+
+The earliest 3D checkpoint (`hexarow_*`) predicted the linear blocks in
+one shot — generation worked, mapping them back onto the geometry did
+not, which is exactly the step that grew into the conform/mapping side
+(`scripts/conform_gt_blocks.py`, `00_history` panel against the cfd
+refill of the same geometry):
+
+**3 — Polytron (3D block structures, the active path).** A decoder-only
+transformer (GPTCond, 40 M params, GRPO-refined) over quantised block
+tokens, conditioned on the geometry's labelled-surface point cloud and
+the block count. Inference is the whole chain: geometry in, mapped
+blocking and CFD-grade transfinite refill out (`scripts/infer.py`,
+`python scripts/infer.py --npz data/hex3d_algohex/batch/machine_0034_n2000/sample.npz --ckpt data/grpo_cart_step300.pt --blocks 12 --k 8`).
+
+| geometry | conditioning cloud | generated blocking | blocking, mapped | CFD transfinite refill |
+|---|---|---|---|---|
+| ![](docs/images/polytron/01_geometry.png) | ![](docs/images/polytron/02_conditioning_cloud.png) | ![](docs/images/polytron/03_generated_blocking.png) | ![](docs/images/polytron/04_blocking_mapped.png) | ![](docs/images/polytron/05_cfd_refill.png) |
+
+Panels: machine_0034 from a single `scripts/infer.py` run (57075 points,
+51936 cells, watertight, 1.07% inverted, boundary max deviation 2.5e-10).
+
+## Layout
 
 ## Layout
 

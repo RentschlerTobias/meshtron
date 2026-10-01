@@ -33,7 +33,12 @@ from meshtron.data.conditioning import build_cloud  # noqa: E402
 from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
 from meshtron.data.polytron_blocks import (PolySeq, build_cloud as poly_cloud,  # noqa: E402
                                            encode_sample, point_labels)
-from meshtron.geometry.polytron_tfi import mesh_candidate, rank_key  # noqa: E402
+from meshtron.geometry.block_mapping import SnapConfigV2, snap_corners_v2  # noqa: E402
+from meshtron.geometry.curved_bridge import refill_curved  # noqa: E402
+from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
+from meshtron.geometry.polytron_tfi import (mesh_candidate, rank_key,  # noqa: E402
+                                            read_hex_vtk, surface_fit)
+from scripts.map_generated_blocks import _seam_path_fn  # noqa: E402
 from meshtron.training.generate import detokenize_safe, generate  # noqa: E402
 from meshtron.training.polytron_sample import predict_curves  # noqa: E402
 from meshtron.training.train_polytron import load_stage  # noqa: E402
@@ -45,6 +50,39 @@ DATA = os.path.join(ROOT, "data", "hex3d_algohex")
 def load_npz(d: str) -> dict:
     with np.load(os.path.join(DATA, d, "sample.npz"), allow_pickle=True) as z:
         return {k: np.asarray(z[k]) for k in z.files}
+
+
+def backmap_fill(V, B, raw, fm, target_h, out_vtk, spec):
+    """Non-learned back-mapping on the same generated blocks: snap corners onto
+    the geometry, route each block edge along the seam graph / nearest feature
+    curve, then curved TFI. Same metrics as `mesh_candidate` so the two are
+    comparable."""
+    import types
+    from meshtron.data.polytron_blocks import block_edges
+    from meshtron.training.polytron_sample import structure_report
+    e = block_edges(B)
+    structure = structure_report(PolySeq(spec.quant_xyz(V), B, e,
+                                         np.zeros((len(e), 6), np.int64)))
+    target = types.SimpleNamespace(curves=fm.seam_curves,
+                                   surface_nearest=fm.surface_nearest)
+    C_snap, records = snap_corners_v2(target, V[B],
+                                      SnapConfigV2(tol_v=0.06, tol_e=0.04))
+    stats = {"routes": 0}
+    path_fn = _seam_path_fn(fm.seam_curves, records, stats)
+    try:
+        rep = refill_curved(C_snap, target_h, out_vtk, fm=target, path_fn=path_fn)
+        P, _H = read_hex_vtk(out_vtk)
+        surf = surface_fit(P, rep["boundary_point_ids"], rep["boundary_quads"],
+                           raw["surface_points"], raw["surface_tris"])
+        return {"structure": structure, "rollout": -1,
+                "seam_routes": stats["routes"],
+                "tfi": {"inverted_curved": rep["inverted_curved"],
+                        "cells_after": rep["cells_after"],
+                        "watertight": rep["watertight"]},
+                "surface": surf}
+    except Exception as e:  # noqa: BLE001
+        return {"structure": structure, "rollout": -1,
+                "tfi": None, "error": f"{type(e).__name__}: {e}"}
 
 
 def main() -> int:
@@ -63,6 +101,13 @@ def main() -> int:
     ap.add_argument("--target-h", type=float, default=0.08)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--blade-weight", type=float, default=3.0)
+    ap.add_argument("--backmap", action="store_true",
+                    help="also fill the same generated blocks with the non-learned "
+                         "back-mapping (snap + seam routing) for comparison")
+    ap.add_argument("--feature-cache", default=os.path.join(ROOT, "data", "features"))
+    ap.add_argument("--no-project", action="store_true",
+                    help="disable the surface projection in the TFI (control: isolates "
+                         "the curves from the projection)")
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "data", "infer_gptcond_curve"))
     ap.add_argument("--no-vtk", action="store_true")
     args = ap.parse_args()
@@ -98,6 +143,10 @@ def main() -> int:
             np.random.default_rng(args.seed)))[None], dtype=torch.float32, device=dev)
 
         cand = {"straight": [], "model": [], "gt": []}
+        if args.backmap:
+            cand["backmap"] = []
+        fm = (FeatureModelV2(os.path.join(DATA, it["dir"], "sample.npz"),
+                             cache_dir=args.feature_cache) if args.backmap else None)
         for i in range(max(1, args.k)):
             torch.manual_seed(args.seed + i)
             topk = 1 if i == 0 else 0
@@ -123,9 +172,13 @@ def main() -> int:
             tmp = os.path.join(args.out_dir, f"_{it['name']}_c{i}_%s.vtk")
             for name, sq in variants.items():
                 r = mesh_candidate(sq, spec, raw, args.target_h, tmp % name,
-                                   project=True)
+                                   project=not args.no_project)
                 r["rollout"] = i
                 cand[name].append(r)
+            if args.backmap:
+                r = backmap_fill(V, B, raw, fm, args.target_h, tmp % "backmap", spec)
+                r["rollout"] = i
+                cand["backmap"].append(r)
         row = {"name": it["name"], "blocks_gt": int(it["blocks"])}
         for name, rs in cand.items():
             ok = [r for r in rs if r.get("tfi")]
@@ -148,12 +201,12 @@ def main() -> int:
             return ("-" if v is None else
                     f"inv {v['inv_share']*100:.2f}% wt {v['watertight']} "
                     f"uncov {v['uncovered']:.3f} nb {v['blocks']}")
-        print(f"{it['name']:40s} nbgt {it['blocks']:2d} | straight {fmt('straight')} "
-              f"| model {fmt('model')} | gt {fmt('gt')}", flush=True)
+        parts = " | ".join(f"{n} {fmt(n)}" for n in cand)
+        print(f"{it['name']:40s} nbgt {it['blocks']:2d} | {parts}", flush=True)
 
     summary = {"split": args.split, "n": len(rows), "k": args.k, "target_h": args.target_h,
                "ckpt": os.path.basename(args.ckpt)}
-    for name in ("straight", "model", "gt"):
+    for name in ("straight", "model", "gt", "backmap"):
         vals = [r[name] for r in rows if r.get(name)]
         summary[name] = {
             "items": len(vals),

@@ -8,15 +8,50 @@ The block structure is the hard part: a coarse decomposition of the flow
 passage into curvilinear hexahedra whose faces follow the geometry. Once it
 exists, refining it into a mesh of any density is mechanical.
 
-```
-parametric geometry          30 cV_ru values per machine
-   -> gmsh                   tetrahedral volume mesh
-   -> labelled surface       7 patches: inlet, outlet, 2x periodic, hub, shroud, blade hull
-   -> conditioning cloud     what the transformer is given
-   -> transformer            a block structure, as a token sequence
-   -> mapping                corners snapped, edges routed, faces projected
-   -> transfinite refill     the CFD mesh
-```
+## The three pipelines at a glance
+
+Three model generations, one goal: the minimal block structure for a
+turbine passage, generated directly from the geometry.
+
+**1 — Hexamesh (the data source, [`domain_partition_3D`](../domain_partition_3D)).**
+AlgoHex produces a fine hex mesh and its sheet collapse produces the coarse
+block structure. The greedy cleanup was the weak point — the same geometry
+collapsed into 12, 22, or 75 blocks depending on which sheet fell first.
+The beam search over collapse orders (`beam_collapse.py`) always reaches
+the minimal topology; see the [hexamesh README row](../domain_partition_3D#the-pipeline-at-a-glance)
+and the [decision doc](../domain_partition_3D/docs/decisions/2026-09-28-beam-collapse-relabelling.md).
+
+| geometry | AlgoHex hex mesh | greedy: 12 | greedy: 22 | greedy: 75 | beam search: 12 |
+|---|---|---|---|---|---|
+| ![](../domain_partition_3D/docs/figures/hexmesh/01_geometry.png) | ![](../domain_partition_3D/docs/figures/hexmesh/02_algohex_hexmesh.png) | ![](../domain_partition_3D/docs/figures/hexmesh/03_greedy_12_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/04_greedy_22_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/05_greedy_75_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/06_beam_12_blocks.png) |
+
+**2 — Quadtron (block tokens with linear edges).** The first-generation
+3D model: a transformer over quantised block tokens, conditioned on the
+point cloud. Generation worked — the tokens decode into valid coarse hex
+structures; the open problem was back-mapping the *linear* blocks onto the
+curved geometry, which is what drove the conform/mapping side
+(`scripts/conform_gt_blocks.py`, `scripts/map_generated_blocks.py`) and,
+eventually, the move to the 3D GPTCond path. The row shows one machine
+(machine_0034) end to end, using the dataset's block structure as the
+stand-in for a generated one — the models are trained on exactly these:
+
+| geometry | conditioning cloud | generated blocking (linear edges) | blocking with curves | TFI refill |
+|---|---|---|---|---|
+| ![](docs/images/quadtron/01_geometry.png) | ![](docs/images/quadtron/02_pointcloud.png) | ![](docs/images/quadtron/03_generated_linear_blocking.png) | ![](docs/images/quadtron/04_blocking_with_curves.png) | ![](docs/images/quadtron/05_tfi_refill.png) |
+
+**3 — Polytron (3D block structures, the active path).** The same encoder
+over block tokens (GPTCond, 40 M parameters, GRPO-refined), trained on the
+3D beam-collapse block structures so the generated structure is already
+blockable onto the geometry. Inference is the whole chain — geometry in,
+mapped blocking and CFD-grade transfinite refill out:
+`scripts/infer.py --npz data/hex3d_algohex/batch/machine_0034_n2000/sample.npz
+--ckpt data/grpo_cart_step300.pt --blocks 12 --k 8` (51 936 cells,
+watertight, 1.07 % inverted, boundary deviation 2.5e-10). Same machine,
+the conformed block structure as the stand-in for a generated one:
+
+| geometry | conditioning cloud | generated blocking (curved) | TFI refill |
+|---|---|---|---|---|
+| ![](docs/images/polytron/01_geometry.png) | ![](docs/images/polytron/02_pointcloud.png) | ![](docs/images/polytron/03_generated_blocking_curved.png) | ![](docs/images/polytron/04_tfi_refill.png) |
 
 ## Layout
 

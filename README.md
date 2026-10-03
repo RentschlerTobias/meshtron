@@ -1,87 +1,109 @@
 # meshtron
 
 A transformer that generates hexahedral **block structures** for turbine
-passages, and the machinery that maps such a structure onto the real geometry
-and fills it into a CFD mesh by transfinite interpolation.
+passages, a second network that bends the generated block edges onto the
+geometry, and the machinery that fills such a structure into a CFD mesh by
+transfinite interpolation.
 
 The block structure is the hard part: a coarse decomposition of the flow
 passage into curvilinear hexahedra whose faces follow the geometry. Once it
-exists, refining it into a mesh of any density is mechanical.
+exists, refining it into a mesh of any density is mechanical. The training
+data — minimal block structures for Sobol-sampled machines — comes from the
+AlgoHex route in [`domain_partition_3D`](../domain_partition_3D).
 
-## The three pipelines at a glance
+Abbreviations used below:
 
-Three model generations, one goal: the minimal block structure for a
-turbine passage, generated directly from the geometry.
+| | |
+|---|---|
+| CFD | computational fluid dynamics |
+| TFI | transfinite interpolation — fills a block with cells from its boundary curves and faces (Coons patches, Gordon–Hall) |
+| dtOO | our parametric turbomachinery design system |
+| GPT | generative pre-trained transformer — here: a decoder-only, causal transformer |
+| GPTCond | our GPT conditioned on the geometry and the block count |
+| HexaRow | our row-encoded tokenizer for hexahedral block structures |
+| MLP | multi-layer perceptron |
+| FiLM | feature-wise linear modulation — a condition vector scales and shifts every channel: `h ← h·(1+tanh c) + c` |
+| SFT | supervised fine-tuning — here the first, supervised training stage |
+| GRPO | group relative policy optimisation — the reinforcement-learning stage: several rollouts per geometry, each rewarded relative to its group |
+| KL | Kullback–Leibler divergence, the anchor that keeps GRPO close to the supervised model |
+| VTK / npz | ParaView mesh files / NumPy archives (one `sample.npz` per machine) |
+| val | the validation split: geometries the models never trained on |
 
-**1 — Hexamesh (the data source, [`domain_partition_3D`](../domain_partition_3D)).**
-AlgoHex produces a fine hex mesh and its sheet collapse produces the coarse
-block structure. The greedy cleanup was the weak point — the same geometry
-collapsed into 12, 22, or 75 blocks depending on which sheet fell first.
-The beam search over collapse orders (`beam_collapse.py`) always reaches
-the minimal topology; see the [hexamesh README row](../domain_partition_3D#the-pipeline-at-a-glance)
-and the [decision doc](../domain_partition_3D/docs/decisions/2026-09-28-beam-collapse-relabelling.md).
+## The pipeline at a glance
 
-| geometry | AlgoHex hex mesh | greedy: 12 | greedy: 22 | greedy: 75 | beam search: 12 |
-|---|---|---|---|---|---|
-| ![](../domain_partition_3D/docs/figures/hexmesh/01_geometry.png) | ![](../domain_partition_3D/docs/figures/hexmesh/02_algohex_hexmesh.png) | ![](../domain_partition_3D/docs/figures/hexmesh/03_greedy_12_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/04_greedy_22_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/05_greedy_75_blocks.png) | ![](../domain_partition_3D/docs/figures/hexmesh/06_beam_12_blocks.png) |
+![The pipeline in five steps](docs/images/polytron/00_pipeline_steps.png)
 
-**2 — Quadtron (block tokens with linear edges).** The first-generation
-3D model: a transformer over quantised block tokens, conditioned on the
-point cloud. Generation worked — the tokens decode into valid coarse hex
-structures; the open problem was back-mapping the *linear* blocks onto the
-curved geometry, which is what drove the conform/mapping side
-(`scripts/conform_gt_blocks.py`, `scripts/map_generated_blocks.py`) and,
-eventually, the move to the 3D GPTCond path. The row shows one machine
-(machine_0034) end to end, using the dataset's block structure as the
-stand-in for a generated one — the models are trained on exactly these:
+1. **Geometry surface** — the same dtOO geometry the numerical route starts
+   from, as a labelled surface (7 patches).
+2. **Surface point cloud** — 1000 points sampled from that surface, the whole
+   conditioning signal.
+3. **Block structure** — `GPTCond` generates it token by token, with straight
+   edges: the corners are exact, the edges are chords.
+4. **Curved block edges** — the edge network (`CurveModel`) turns every block
+   edge into a cubic Bézier curve on the geometry (dashed: the straight
+   chords).
+5. **CFD mesh** — every block is filled by curved TFI; neighbouring blocks
+   agree on their shared faces, so the hex mesh is conforming.
 
-| geometry | conditioning cloud | generated blocking (linear edges) | blocking with curves | TFI refill |
-|---|---|---|---|---|
-| ![](docs/images/quadtron/01_geometry.png) | ![](docs/images/quadtron/02_pointcloud.png) | ![](docs/images/quadtron/03_generated_linear_blocking.png) | ![](docs/images/quadtron/04_blocking_with_curves.png) | ![](docs/images/quadtron/05_tfi_refill.png) |
+Steps 3–5 show the dataset structure of base_a as the stand-in for a
+generated one — the exact object the models are trained to produce.
 
-**3 — Polytron (3D block structures, the active path).** The same encoder
-over block tokens (GPTCond, 46.9 M parameters, GRPO-refined), trained on the
-3D beam-collapse block structures so the generated structure is already
-blockable onto the geometry. Inference is the whole chain — geometry in,
-mapped blocking and CFD-grade transfinite refill out:
-`scripts/infer.py --npz data/hex3d_algohex/batch/machine_0034_n2000/sample.npz
---ckpt data/grpo_cart_step300.pt --blocks 12 --k 8` (51 936 cells,
-watertight, 1.07 % inverted, boundary deviation 2.5e-10). Same machine,
-the conformed block structure as the stand-in for a generated one:
+## The model
 
-| geometry | conditioning cloud | generated blocking (curved) | TFI refill |
-|---|---|---|---|---|
-| ![](docs/images/polytron/01_geometry.png) | ![](docs/images/polytron/02_pointcloud.png) | ![](docs/images/polytron/03_generated_blocking_curved.png) | ![](docs/images/polytron/04_tfi_refill.png) |
+![The model: generator and edge network](docs/images/polytron/00_model.png)
 
-The same chain as five steps, with the learned edge stage spelled out
-(base_a, the dataset structure as the stand-in for a generated one):
+**The generator, `GPTCond`** (`meshtron/model/gpt_cond.py`), 46.9 M
+parameters, 12 layers, 8 heads, width 512.
 
-![The Polytron path in five steps](docs/images/polytron/00_pipeline_steps.png)
+- **Tokens.** HexaRow writes a block structure as rows of blocks: the first
+  block of a row emits all 8 corners (entry and exit ring), each following
+  block that shares a face only its 4 exit corners; `EOR` closes a row, `STOP`
+  the structure. Cartesian quantisation, 512 bins, 3 tokens per corner
+  (x, y, z).
+- **Embedding.** Each token is the sum of three learned embeddings: its value,
+  its absolute position and its slot (which of x, y, z it carries).
+- **Conditioning.** The point encoder lifts every point with an MLP, lets 16
+  learned queries cross-attend into the set and pools them into one vector;
+  the block count goes through its own MLP. The two vectors add into one
+  condition vector, applied once by FiLM before the decoder stack — the
+  geometry sets a scale and a shift per channel, and the residual stream
+  carries it through all 12 layers.
+- **Slot mask** (`slot_mask` in `meshtron/training/generate.py`). Before
+  every sampling step, every token that cannot legally stand at this position
+  gets −∞: coordinates only from the 512 coordinate bins, `EOR`/`STOP` only
+  when a row closes on a whole ring of 4 corners (the first row needs both
+  rings), after `STOP` only `END`. Every generated stream is grammatical and
+  terminates. What the mask cannot guarantee is geometric validity — that is
+  what the GRPO reward is spent on.
 
-(1) the dtOO geometry; (2) the conditioning point cloud; (3) the block
-structure with straight edges -- what `GPTCond` emits; (4) the edge
-network (`CurveModel`) turns every block edge into a cubic Bézier curve on
-the geometry (dashed: the straight chords); (5) curved TFI refill into the
-conforming hex CFD mesh.
+**The edge network, `CurveModel`** (`meshtron/model/polytron.py`), trained
+separately.
 
-## Layout
+- **Input:** the generated corners and blocks, the block count and the point
+  cloud (xyz with Fourier features and the patch label).
+- The cloud is encoded into 128 latent vectors (Perceiver-style
+  cross-attention) and kept as a set, so an edge can look up *where* on the
+  geometry it lies; a bidirectional encoder runs over the corners.
+- Each undirected block edge is described by its two corner features, their
+  product, its chord direction and length; 6 layers let all edges attend to
+  each other and to the cloud at once — **not autoregressive**.
+- **Output:** per edge the two inner control points of a cubic Bézier curve,
+  as offsets from the chord's third points in chord lengths, μ-law companded
+  into 256 bins — a classification (cross-entropy in training, argmax at
+  inference). Offset 0 is exactly the straight edge.
 
-```
-meshtron/
-  geometry/   feature model, seam curves, edge routing, transfinite refill
-  model/      GPTCond over block tokens, Quadtron, their encoders
-  data/       tokenizers, conditioning clouds, datasets, augmentation
-  training/   supervised and GRPO training, generation, rewards, the 2D stack
-  viz/        plotting, tokenisation animations, terminal UI
-  legacy/     earlier generations, kept for reference
-scripts/      one-shot tooling: dataset builds, batch runs, diagnostics, gates
-showcase/     a five-script walkthrough of the whole repo
-docs/         decisions, proposals, notes
-```
+On 20 val geometries (`reports/quadtron_curve_phase2.md`):
 
-`meshtron/__init__.py` puts every subpackage directory on `sys.path` so that
-modules still using bare imports keep working. New code should use the full
-path: `from meshtron.geometry import patch_paths`.
+| fill of the generated blocks | geometry surface not reached | inverted cells |
+|---|---|---|
+| straight edges | 43.5 % | 0.49 % |
+| non-learned back-mapping (snap corners, route edges along seams) | 43.4 % | 0.62 % |
+| **edge network** | **25.6 %** | **0.29 %** |
+| ground-truth blocks and curves (ceiling) | 0.0 % | 0.04 % |
+
+"Not reached" is the share of geometry surface triangles farther than 0.02
+from the mesh boundary. The remaining quarter is the placement of the
+generated blocks, which no edge stage can repair.
 
 ## Start here
 
@@ -90,12 +112,26 @@ uv run python showcase/01_overview.py
 ```
 
 Eight cells, the whole chain on one machine, each printing what it produced and
-writing a VTK. `showcase/02` to `05` open one box each -- the data and the
+writing a VTK. `showcase/02` to `05` open one box each — the data and the
 tokenizer, the model, the training loop, the mapping. They are written as
 `# %%` cells so they can be stepped through from an editor into a REPL. See
 `showcase/README.md`.
 
-## Inference: a geometry in, a CFD mesh out
+## Inference
+
+Generator plus learned edge network, with the straight and the ground-truth
+fills next to it for comparison:
+
+```
+export PYTHONPATH=…/domain_partition_3D
+uv run python scripts/infer_gptcond_curve.py --split val --n 20 --k 3 \
+    --curve-ckpt data/hexa_curve_best.pt
+```
+
+Generator plus the non-learned mapping, from the geometry alone — labelled
+surface, conditioning cloud, generated blocking, snapping, edge routing, TFI —
+one VTK per stage (`01_geometry` … `05_cfd_refill`) and a `report.json` with
+every number of every stage:
 
 ```
 uv run python scripts/infer.py \
@@ -103,18 +139,11 @@ uv run python scripts/infer.py \
     --ckpt data/grpo_cart_step300.pt --blocks 12 --k 8
 ```
 
-The whole chain from the geometry alone -- labelled surface, conditioning point
-cloud, generated blocking, snapping, edge routing, transfinite fill -- writing
-one VTK per stage (`01_geometry` .. `05_cfd_refill`) plus a `report.json` that
-carries every number of every stage. Every other entry point starts from
-something pre-computed; this one starts where a new machine does.
-
 `--blocks` is an input, not a derived quantity: the block count conditions the
 model and the geometry does not carry it. `--blocks-sweep 12,16,20` tries
-several and keeps the best mesh.
+several and keeps the best mesh. `--k` is the number of rollouts.
 
-On four held-out geometries (the val split of the family tokens, so geometries
-the model never trained on), at h=0.08 with 4 rollouts each:
+On four held-out geometries, at cell size h=0.08 with 4 rollouts each:
 
 | geometry | blocks | cells | watertight | boundary max | inverted |
 |---|---|---|---|---|---|
@@ -123,41 +152,57 @@ the model never trained on), at h=0.08 with 4 rollouts each:
 | machine_0026_n2000 | 12 | 11985 | yes | 7.7e-11 | 4.79% |
 | machine_0034_n8000 | 16 | 12390 | yes | 3.1e-10 | 2.62% |
 
-## The two model families
+## Training
 
-**3D block structures** — the active path. `GPTCond`
-(`meshtron/model/gpt_cond.py`) is a decoder-only transformer over quantised
-block-structure tokens, conditioned on a surface point cloud and the block
-count: both are encoded into one vector per sample and applied to every token
-position as a FiLM scale and shift. 46.9 M parameters, 12 layers, 8 heads.
-Trained by `meshtron/training/train_hexarow_full.py`, refined with GRPO by
-`train_grpo.py`, sampled by `generate.py` under a structural mask that makes a
-syntactically broken sequence impossible.
+The generator: supervised (SFT) by `meshtron/training/train_hexarow_full.py`,
+then GRPO by `train_grpo.py`; the production checkpoint is
+`data/grpo_cart_step300.pt`.
 
-![The model: generator and edge network](docs/images/polytron/00_model.png)
+The edge network, on the curves of the same dataset structures (683 train /
+78 val):
 
-Left to right: the point cloud (point encoder, 16 queries cross-attend,
-pooled to one vector) and the block count (MLP) sum into one condition
-vector, applied once by FiLM before the 12-layer causal decoder. Each
-token is the sum of a value, a position and a slot embedding; before
-sampling, the slot mask (`slot_mask` in `generate.py`) sets every token
-that cannot legally stand at this position to −∞, so every stream is
-grammatical and terminates. The decoded straight-edged blocks go to the
-second network, the edge network (`CurveModel` in
-`meshtron/model/polytron.py`): non-autoregressive, it reads the corners,
-the blocks and the point cloud and predicts per edge the two inner control
-points of a cubic Bézier curve, as chord-relative offsets in 256 μ-law
-bins. On 20 val geometries it cuts the share of the geometry surface the
-mesh fails to reach from 43 % (straight edges or the non-learned
-back-mapping) to 26 %, and the inverted cells from 0.6 % to 0.3 %
-(`reports/quadtron_curve_phase2.md`).
+```
+uv run python scripts/build_hexa_curve_dataset.py
+uv run python -m meshtron.training.train_polytron --stage curve \
+    --data data/hexa_curve_blocks.pt --out data/hexa_curve \
+    --epochs 300 --bs 16 --lr 3e-4 --d 256 --heads 8 --layers 6 \
+    --dropout 0.1 --n-points 2048 --eval-every 10 --weight-label 5
+```
 
-**2D quads (Quadtron)** — `meshtron/model/quadtron.py` with
-`meshtron/training/trainer.py`. Older, and it does not yet have the coordinate
-slot embedding or the polar conditioning the 3D path gained. Bringing it up to
-the same footing is open work.
+End-to-end check of the training path:
 
-## Mapping a block structure onto geometry
+```
+uv run python scripts/test_training_e2e.py        # four phases, ~2 min
+```
+
+Supervised run, resume, real GRPO steps, then inference with the checkpoint it
+just trained. Each phase asserts the claim its stage has to make — the loss
+falls, the resumed run continues instead of restarting, the best-val checkpoint
+loads and not merely exists, and GRPO does not move the policy when no reward
+says to. It runs at width 128 (1.3 M parameters) because it tests the path.
+
+`scripts/verify_pipeline.py` covers the rest: tokenisation in 2D and 3D,
+Cartesian and polar, a real forward and training step for both model families,
+the GRPO entry point, the mapping, and inference end to end. Its first run
+found four real defects, among them a KL anchor that was the plain log-ratio
+mean rather than a divergence; `--kl-estimator` now defaults to `k3` (the
+unbiased, always non-negative estimator), `naive` reproduces the existing
+checkpoints. `docs/decisions/2026-09-24-training-end-to-end.md` has the
+measurements.
+
+## Model families
+
+- **GPTCond + HexaRow** — the active generator, above. The reports call this
+  pairing the "3D Quadtron".
+- **Polytron** (`meshtron/model/polytron.py`, `scripts/infer_polytron.py`) —
+  the PolyGen recipe lifted to hexahedra: a vertex model, a pointer-network
+  block model and the curve model, chained at inference. Its curve model is the
+  edge network used above.
+- **2D Quadtron** (`meshtron/model/quadtron.py`, `meshtron/training/trainer.py`)
+  — the older quad-mesh model. It does not yet have the slot embedding or the
+  polar conditioning the 3D path gained.
+
+## Mapping a block structure onto geometry (non-learned)
 
 ```
 uv run python scripts/conform_gt_blocks.py \
@@ -165,72 +210,59 @@ uv run python scripts/conform_gt_blocks.py \
     --out-dir data/features_debug/run
 ```
 
-Corners snap onto seam junctions, seam curves or patches. Every boundary edge is
-routed: along a feature curve where its ends sit on one, otherwise as a shortest
-path on the patch it belongs to -- which is why the blade footprint, being a
-hole in the hub patch, is walked *around* rather than cut through. Boundary face
-interiors are projected onto their patch, and Gordon-Hall fills the volume.
-
-The mapping itself lives in `meshtron/geometry/conform.py`, so the gate above
-and `scripts/infer.py` run the same code rather than two copies of it.
-`ConformOptions` documents which knobs are off by default because measurement
-said so.
-
-Batch it with `scripts/run_conform_batch.py`, and check a blocking before
-mapping it with `scripts/detect_block_tjunctions.py`.
-
-## Training
-
-```
-uv run python scripts/test_training_e2e.py        # four phases, ~2 min
-```
-
-Supervised run, resume, real GRPO steps, then inference with the checkpoint it
-just trained. Each phase asserts the claim its stage has to make -- the loss
-falls, the resumed run continues instead of restarting, the best-val checkpoint
-loads and not merely exists, and GRPO does not move the policy when no reward
-says to. It runs at d=128 (1.3 M params) because it tests the path; production
-is d=512, 12 layers, 46.9 M.
-
-`scripts/verify_pipeline.py` covers the rest: tokenisation in 2D and 3D,
-cartesian and polar, a real forward and training step for both model families,
-the GRPO entry point, the mapping, and inference end to end. 12 pass, 0 fail,
-0 missing. The 2D corpus lives outside the repo; `meshtron.data.quad_domain`
-adapts its field names to the ones `MeshData` reads.
-
-It found four real defects on its first run: `train_grpo.py` was not runnable
-as a script, it could not use a token file without embedded conditioning, the
-best-val checkpoint lacked the fields needed to load it, and the KL anchor was
-the plain log-ratio mean rather than a divergence -- which with a flat reward
-produced a gradient norm of 0.24 where the correct value is 0.
-`docs/decisions/2026-09-24-training-end-to-end.md` has the measurements.
-`--kl-estimator` now defaults to `k3`; `naive` reproduces the existing
-checkpoints, which were all trained with it.
+Corners snap onto seam junctions, seam curves or patches. Every boundary edge
+is routed: along a feature curve where its ends sit on one, otherwise as a
+shortest path on the patch it belongs to — which is why the blade footprint,
+being a hole in the hub patch, is walked *around* rather than cut through.
+Boundary face interiors are projected onto their patch, and Gordon–Hall fills
+the volume. The code lives in `meshtron/geometry/conform.py`, shared by this
+gate and `scripts/infer.py`; `ConformOptions` documents which knobs are off by
+default because measurement said so. Batch it with
+`scripts/run_conform_batch.py`, check a blocking first with
+`scripts/detect_block_tjunctions.py`.
 
 ## Where it stands
 
-Conformity is solved. Over the whole corpus at h=0.05, 679 of 680 samples pass
-a gate of 1e-3, with a median boundary error of 1.26e-10.
+- **Conformity is solved.** Over the whole corpus at h=0.05, 679 of 680
+  samples pass a gate of 1e-3, median boundary error 1.26e-10.
+- **Coverage is the open gap.** With the edge network a generated structure
+  still leaves about a quarter of the geometry surface unreached; the cause is
+  where the generator places the blocks, not the edges.
+- **Cell validity** of the non-learned mapping: median 0.42 % inverted cells,
+  introduced by the edge routing rather than inherited — the same corners
+  refilled with the blocking's own edge polylines give 9 folded cells where the
+  routed ones give 218, all in the first cell layer at the blade
+  (`scripts/make_inverted_debug.py` writes both).
+- **"Sits on the geometry" and "covers the geometry" are different
+  questions.** A blocking that fails to wrap the blade scores 1e-10 on the
+  first and leaves 20 % of the blade uncovered on the second;
+  `scripts/make_pipeline_demo.py` reports both.
+- **17 % of the corpus carries block-level T-junctions**: two blocks touching
+  across only part of a side, which the four-corner face format cannot
+  express, leaving an unmeshed slit.
 
-Cell validity is not. Median 0.42% inverted cells, and they are introduced by
-the mapping rather than inherited: the same corners refilled with the
-blocking's own edge polylines give 9 folded cells where the routed ones give
-218, all in the first cell layer at the blade. `scripts/make_inverted_debug.py`
-writes both meshes side by side.
+`docs/decisions/2026-09-23-blocking-geometry-mapping.md` carries the
+measurements behind the mapping statements.
 
-Two further things worth knowing before trusting a number here:
+## Layout
 
-- **"Sits on the geometry" and "covers the geometry" are different questions.**
-  A blocking that fails to wrap the blade scores 1e-10 on the first and leaves
-  20% of the blade uncovered on the second. `scripts/make_pipeline_demo.py`
-  reports both.
-- **17% of the corpus carries block-level T-junctions**: two blocks touching
-  across only part of a side, which the four-corner face format cannot express,
-  leaving an unmeshed slit. The AlgoHex mesh underneath is conforming, so
-  regenerating would reproduce it.
+```
+meshtron/
+  geometry/   feature model, seam curves, edge routing, transfinite refill
+  model/      GPTCond, Polytron (incl. the edge network), Quadtron, encoders
+  data/       tokenizers, conditioning clouds, datasets, augmentation
+  training/   supervised and GRPO training, generation, rewards, the 2D stack
+  viz/        plotting, tokenisation animations, terminal UI
+  legacy/     earlier generations, kept for reference
+scripts/      one-shot tooling: dataset builds, batch runs, diagnostics, gates
+showcase/     a five-script walkthrough of the whole repo
+reports/      measured results, one file per study
+docs/         decisions, proposals, notes, README figures
+```
 
-`docs/decisions/2026-09-23-blocking-geometry-mapping.md` carries every
-measurement behind those statements.
+`meshtron/__init__.py` puts every subpackage directory on `sys.path` so that
+modules still using bare imports keep working. New code should use the full
+path: `from meshtron.geometry import patch_paths`.
 
 ## Gates
 
@@ -249,5 +281,5 @@ paths.
 
 ## Environment
 
-`uv run` for everything; the system Python lacks scipy. One RTX 4060 with 8 GB,
-runs are serial. `data/` is not versioned.
+`uv run` for everything; the system Python lacks scipy. One RTX 4060 with
+8 GB, runs are serial. `data/` is not versioned.

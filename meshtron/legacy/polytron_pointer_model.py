@@ -2,7 +2,7 @@
 polytron_pointer_model.py
 
 Machbarkeitsnachweis fuer den POINTER-KOPF der Stufe 2 (Faces als Zeiger),
-siehe docs/ho_quad_transformer/05_face_block_generator.md und die Erklaerung in
+siehe docs/ho_quad_transformer/05_face_block_generator.md [removed doc: git show ce4eae9:docs/ho_quad_transformer/05_face_block_generator.md] und die Erklaerung in
 polytron_tokenizer.py (Stufe 1 = eindeutige Vertices, Stufe 2 = Faces als 4 Zeiger).
 
 Problem, das der Pointer-Kopf loest

@@ -14,7 +14,7 @@ uv run python -i showcase/03_model.py          # run it and stay in the REPL
 **Start the REPL in the repo root**, so the scripts can find `showcase/`:
 
 ```
-cd /home/t1dde/hydrostack_pipeline/stack/meshtron
+cd <meshtron repo root>
 uv run python            # or :IronRepl with python set to `uv run python`
 ```
 
@@ -64,6 +64,11 @@ map you hold while reading the others.
 | `06_pipeline.py` | the inference chain live, the middle ground 01 skips: the RL checkpoint samples from the npz conditioning cloud, the generated rolls are validated, the best one is snapped and refilled by TFI -- run on `machine_0034_n2000` like 01, so outputs can be compared (`08`-`11`) |
 
 ## Things worth knowing before you start
+
+**The edge network is not in the showcase.** The scripts map the generated
+straight-edged blocks with the non-learned route (`05_mapping.py`, `06`). The
+learned edge stage — `CurveModel`, a cubic Bézier per block edge — runs in
+`scripts/infer_gptcond_curve.py`; the README's "The model" section explains it.
 
 **The checkpoint in `_common.py` predates the slot embedding.** Its `cfg` has
 no `npt` and no `coords` key, which is how you can tell. It has to be fed with

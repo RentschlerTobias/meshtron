@@ -2,7 +2,7 @@
 meshtron_domain.py
 
 DEPRECATED: failed experiment (severe overfitting, invalid generated output —
-see docs/ho_quad_transformer/01_current_model_and_diagnosis.md). Superseded by
+see docs/ho_quad_transformer/01_current_model_and_diagnosis.md [removed doc: git show ce4eae9:docs/ho_quad_transformer/01_current_model_and_diagnosis.md]). Superseded by
 Polytron (polytron_tokenizer.py, polytron_chain.py). Kept for reference only,
 not maintained or extended.
 

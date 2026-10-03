@@ -2,7 +2,7 @@
 polytron_tokenizer.py
 
 Prototyp fuer den Zwei-Stufen-Tokenizer (Polytron, siehe
-docs/ho_quad_transformer/05_face_block_generator.md).
+docs/ho_quad_transformer/05_face_block_generator.md [removed doc: git show ce4eae9:docs/ho_quad_transformer/05_face_block_generator.md]).
 
 Idee: Topologie von Geometrie trennen.
   Stufe 1 (Vertices): jede *eindeutige* Blockecke einmal als (r, theta) quantisiert.
@@ -587,7 +587,7 @@ def round_trip_report(data, tok, n_max=None, verbose_fail=3):
                 # hex edges), not a tokenizer defect. Any relative-to-chord
                 # metric explodes by construction here (division by ~0), same
                 # documented "Bug 2" as the 2D pipeline's mini-edge outliers
-                # (docs/ho_quad_transformer/06_edge_geometry_study.md) -- skip
+                # (docs/ho_quad_transformer/06_edge_geometry_study.md [removed doc: git show ce4eae9:docs/ho_quad_transformer/06_edge_geometry_study.md]) -- skip
                 # from the aggregate instead of letting it swamp mean/max.
                 continue
             geom_rel_errs.append(float(np.max(np.linalg.norm(rec - gt, axis=1)) / chord))

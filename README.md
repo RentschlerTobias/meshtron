@@ -40,10 +40,15 @@ Abbreviations used below:
 3. **Block structure** — `GPTCond` generates it token by token, with straight
    edges: the corners are exact, the edges are chords.
 4. **Curved block edges** — the edge network (`CurveModel`) turns every block
-   edge into a cubic Bézier curve on the geometry (dashed: the straight
-   chords).
+   edge into a cubic Bézier curve (dashed: the straight chords).
 5. **CFD mesh** — every block is filled by curved TFI; neighbouring blocks
-   agree on their shared faces, so the hex mesh is conforming.
+   agree on their shared faces, so the hex mesh is conforming. During the
+   fill the boundary is projected onto the labelled surface: corners onto
+   their patches, boundary edges and face interiors onto the patches of their
+   faces — the Bézier curves give the shape, the projection puts the boundary
+   exactly on the geometry. The fill covers the core passage; the blade O-grid
+   and the hub/shroud boundary layer are not re-inserted here (that step,
+   `reattach.py` / `ogrid_extrude.py`, lives in `domain_partition_3D`).
 
 Steps 3–5 show the dataset structure of base_a as the stand-in for a
 generated one — the exact object the models are trained to produce.
@@ -228,6 +233,9 @@ default because measurement said so. Batch it with
 - **Coverage is the open gap.** With the edge network a generated structure
   still leaves about a quarter of the geometry surface unreached; the cause is
   where the generator places the blocks, not the edges.
+- **The blade is not re-inserted** into the meshes this repo produces: they
+  are the core passage around the O-grid cut face. Joining the generated core
+  with the blade O-grid and the boundary layer is open.
 - **Cell validity** of the non-learned mapping: median 0.42 % inverted cells,
   introduced by the edge routing rather than inherited — the same corners
   refilled with the blocking's own edge polylines give 9 folded cells where the

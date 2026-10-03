@@ -16,7 +16,8 @@ Two networks and a mesher, for turbomachinery flow passages:
 2. **The edge network, `CurveModel`** — non-autoregressive; per block edge the
    two inner control points of a cubic Bézier curve.
 3. **The mesher** — maps a block structure onto the geometry and fills it by
-   transfinite interpolation (TFI) into a conforming hex CFD mesh.
+   transfinite interpolation (TFI) into a conforming hex mesh for
+   computational fluid dynamics (CFD).
 
 The training data comes from `../domain_partition_3D` (AlgoHex route, one
 `sample.npz` per machine).

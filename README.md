@@ -40,7 +40,7 @@ stand-in for a generated one — the models are trained on exactly these:
 | ![](docs/images/quadtron/01_geometry.png) | ![](docs/images/quadtron/02_pointcloud.png) | ![](docs/images/quadtron/03_generated_linear_blocking.png) | ![](docs/images/quadtron/04_blocking_with_curves.png) | ![](docs/images/quadtron/05_tfi_refill.png) |
 
 **3 — Polytron (3D block structures, the active path).** The same encoder
-over block tokens (GPTCond, 40 M parameters, GRPO-refined), trained on the
+over block tokens (GPTCond, 46.9 M parameters, GRPO-refined), trained on the
 3D beam-collapse block structures so the generated structure is already
 blockable onto the geometry. Inference is the whole chain — geometry in,
 mapped blocking and CFD-grade transfinite refill out:
@@ -52,6 +52,17 @@ the conformed block structure as the stand-in for a generated one:
 | geometry | conditioning cloud | generated blocking (curved) | TFI refill |
 |---|---|---|---|---|
 | ![](docs/images/polytron/01_geometry.png) | ![](docs/images/polytron/02_pointcloud.png) | ![](docs/images/polytron/03_generated_blocking_curved.png) | ![](docs/images/polytron/04_tfi_refill.png) |
+
+The same chain as five steps, with the learned edge stage spelled out
+(base_a, the dataset structure as the stand-in for a generated one):
+
+![The Polytron path in five steps](docs/images/polytron/00_pipeline_steps.png)
+
+(1) the dtOO geometry; (2) the conditioning point cloud; (3) the block
+structure with straight edges -- what `GPTCond` emits; (4) the edge
+network (`CurveModel`) turns every block edge into a cubic Bézier curve on
+the geometry (dashed: the straight chords); (5) curved TFI refill into the
+conforming hex CFD mesh.
 
 ## Layout
 
@@ -118,10 +129,28 @@ the model never trained on), at h=0.08 with 4 rollouts each:
 (`meshtron/model/gpt_cond.py`) is a decoder-only transformer over quantised
 block-structure tokens, conditioned on a surface point cloud and the block
 count: both are encoded into one vector per sample and applied to every token
-position as a FiLM scale and shift. 40 M parameters, 12 layers, 8 heads.
+position as a FiLM scale and shift. 46.9 M parameters, 12 layers, 8 heads.
 Trained by `meshtron/training/train_hexarow_full.py`, refined with GRPO by
 `train_grpo.py`, sampled by `generate.py` under a structural mask that makes a
 syntactically broken sequence impossible.
+
+![The model: generator and edge network](docs/images/polytron/00_model.png)
+
+Left to right: the point cloud (point encoder, 16 queries cross-attend,
+pooled to one vector) and the block count (MLP) sum into one condition
+vector, applied once by FiLM before the 12-layer causal decoder. Each
+token is the sum of a value, a position and a slot embedding; before
+sampling, the slot mask (`slot_mask` in `generate.py`) sets every token
+that cannot legally stand at this position to −∞, so every stream is
+grammatical and terminates. The decoded straight-edged blocks go to the
+second network, the edge network (`CurveModel` in
+`meshtron/model/polytron.py`): non-autoregressive, it reads the corners,
+the blocks and the point cloud and predicts per edge the two inner control
+points of a cubic Bézier curve, as chord-relative offsets in 256 μ-law
+bins. On 20 val geometries it cuts the share of the geometry surface the
+mesh fails to reach from 43 % (straight edges or the non-learned
+back-mapping) to 26 %, and the inverted cells from 0.6 % to 0.3 %
+(`reports/quadtron_curve_phase2.md`).
 
 **2D quads (Quadtron)** — `meshtron/model/quadtron.py` with
 `meshtron/training/trainer.py`. Older, and it does not yet have the coordinate
@@ -161,7 +190,7 @@ just trained. Each phase asserts the claim its stage has to make -- the loss
 falls, the resumed run continues instead of restarting, the best-val checkpoint
 loads and not merely exists, and GRPO does not move the policy when no reward
 says to. It runs at d=128 (1.3 M params) because it tests the path; production
-is d=512, 12 layers, 40 M.
+is d=512, 12 layers, 46.9 M.
 
 `scripts/verify_pipeline.py` covers the rest: tokenisation in 2D and 3D,
 cartesian and polar, a real forward and training step for both model families,

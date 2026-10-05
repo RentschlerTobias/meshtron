@@ -2,7 +2,7 @@
 
 Single source of truth for point-cloud generation and geometry split:
   - build_cloud: surface points -> normalized [n,4] cloud (r, sin, cos, z),
-    optional blade oversampling (x3).
+    optional blade (= O-grid cut, label 7) oversampling.
   - split_by_geometry: 90/10 split with GEOMETRY-LEVEL disjointness.
 
 Parity: build_cloud(..., weights=None) produces bit-identically what
@@ -15,14 +15,21 @@ from __future__ import annotations
 
 import numpy as np
 
-# tet_prep.py label mapping: 1=hub, 2=shroud, 3=inlet, 4=outlet, 5=blade,
-# 6=periodic_A, 7=periodic_B. Label 5 verified in the real sample.npz.
-BLADE_LABEL = 5
-
-# O-grid cut band surface around the blade row (npz surface label verified:
-# r spans hub..shroud, z limited to the band, theta ±45 deg). Only used at
-# generation time via band_weight; training data is untouched.
-BAND_LABEL = 7
+# Surface labels of sample.npz (`surface_tri_label`), written by
+# domain_partition_3D/experimentell/hex3d_algohex/tet_prep_v5.py (S_* constants).
+# The blade wall itself is NOT in the mesh: the blade O-grid is cut out before
+# AlgoHex, so the only trace of the blade is the O-grid cut surface, label 7.
+#
+# Label 5 is the hub boundary-layer cut, NOT the blade. The old tet_prep.py
+# mapping (5 = blade) does not apply to these files; using it made every
+# "blade" weighting oversample the hub cut instead. `check_surface_labels`
+# fails loudly if this table and the data ever disagree.
+SURFACE_LABELS = {1: "inlet", 2: "outlet", 3: "periodic_A", 4: "periodic_B",
+                  5: "bl_interface_hub", 6: "bl_interface_shroud",
+                  7: "ogrid_interface"}
+OGRID_LABEL = 7
+BLADE_LABEL = OGRID_LABEL      # the blade is represented by its O-grid cut surface
+BAND_LABEL = OGRID_LABEL       # kept for callers of point_is_band
 
 
 def polar_from_xyz(p: np.ndarray) -> np.ndarray:
@@ -46,10 +53,40 @@ def surface_cloud(raw: dict) -> np.ndarray:
     return np.asarray(vp, dtype=np.float64)
 
 
+def check_surface_labels(points: np.ndarray, tris: np.ndarray,
+                         tri_label: np.ndarray) -> None:
+    """Geometric sanity check of the label table (raises ValueError).
+
+    The O-grid cut (7) wraps the blade, so it spans the passage radially from
+    hub to shroud; the hub BL cut (5) lies at the hub, the shroud BL cut (6)
+    at the shroud. A swapped or outdated label mapping violates this.
+    """
+    p = np.asarray(points, dtype=np.float64)
+    tris = np.asarray(tris, dtype=np.int64)
+    lab = np.asarray(tri_label)
+    r = np.hypot(p[:, 0], p[:, 1])
+    span = float(r.max() - r.min())
+
+    def r_of(label):
+        sel = lab == label
+        if not sel.any():
+            raise ValueError(f"no triangles with label {label} ({SURFACE_LABELS.get(label)})")
+        return r[np.unique(tris[sel])]
+    r7, r5, r6 = r_of(OGRID_LABEL), r_of(5), r_of(6)
+    if float(r7.max() - r7.min()) < 0.5 * span:
+        raise ValueError("label 7 does not span hub..shroud: it is not the O-grid cut")
+    if not (np.median(r5) < np.median(r7) < np.median(r6)):
+        raise ValueError("label order hub(5) < O-grid(7) < shroud(6) in r violated")
+
+
 def point_is_blade(n_points: int, tris: np.ndarray, tri_label: np.ndarray,
                    blade_label: int = BLADE_LABEL) -> np.ndarray:
-    """Per-point blade flag: a point is blade if it hangs on a blade triangle
-    (label==blade_label). tris [T,3] indices into surface_points."""
+    """Per-point blade flag: a point is blade if it hangs on a triangle of the
+    O-grid cut surface (label 7, see SURFACE_LABELS). tris [T,3] indices into
+    surface_points."""
+    if blade_label != OGRID_LABEL:
+        raise ValueError(f"blade_label={blade_label}: the blade is label {OGRID_LABEL} "
+                         f"(ogrid_interface); label 5 is the hub BL cut")
     mask = np.zeros(int(n_points), dtype=bool)
     tris = np.asarray(tris, dtype=np.int64)
     sel = np.asarray(tri_label) == blade_label

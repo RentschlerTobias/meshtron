@@ -2,7 +2,8 @@
 
 Every base machine dir (machine_XXXX) carries the input surface in
 machine_XXXX_tet.vtk (ASCII UNSTRUCTURED_GRID, CELL_DATA SCALARS color).
-The blade surface is the set of cells tagged color==5. Identity is the
+The blade is represented by the O-grid cut surface, cells tagged color==7
+(conditioning.OGRID_LABEL; color 5 is the hub BL cut, not the blade). Identity is the
 blake2b-16 digest of the blade vertex coordinates quantized to 1e-4,
 deduplicated and sorted lexicographically, so it is stable across AlgoHex
 n-parameter runs of one geometry.
@@ -28,7 +29,7 @@ DATA = ROOT / "data" / "hex3d_algohex"
 SCAN_DIRS = ("batch", "batch_t19_sweep")
 OUT = ROOT / "data" / "geom_ids.json"
 MACHINE_RE = re.compile(r"^machine_\d+$")
-BLADE_TAG = 5
+BLADE_TAG = 7   # O-grid cut = blade proxy (conditioning.OGRID_LABEL); 5 is the hub BL cut
 QUANT = 1.0e4
 DIGEST = 16
 
@@ -45,7 +46,7 @@ def _seek(lines: list[str], prefix: str, start: int) -> int:
 
 
 def blade_geom_id(path: str) -> str | None:
-    """blake2b hex of quantized blade vertices, or None if no color-5 cells."""
+    """blake2b hex of quantized blade vertices, or None if no color-7 cells."""
     lines = Path(path).read_text().splitlines()
     i = _seek(lines, "POINTS", 0)
     npts = int(lines[i].split()[1])

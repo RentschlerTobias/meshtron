@@ -156,7 +156,7 @@ uv run python scripts/build_hexa_curve_dataset.py
 uv run python -m meshtron.training.train_polytron --stage curve \
     --data data/hexa_curve_blocks.pt --out data/hexa_curve \
     --epochs 300 --bs 16 --lr 3e-4 --d 256 --heads 8 --layers 6 \
-    --dropout 0.1 --n-points 2048 --eval-every 10 --weight-label 5
+    --dropout 0.1 --n-points 2048 --eval-every 10 --weight-label 7
 ```
 
 End-to-end check of the training path:

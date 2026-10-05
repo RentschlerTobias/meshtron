@@ -40,8 +40,9 @@ HEX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8)
 # Patch labels of the npz surfaces (checked on the geometry: 5 sits at the hub
 # radius, 6 at the shroud, 7 spans hub to shroud around the blade row):
 # 1 inlet, 2 outlet, 3/4 periodic, 5 hub, 6 shroud, 7 O-grid band.
-# conditioning.BLADE_LABEL = 5 is the HUB here; the first Polytron checkpoints
-# oversampled it by mistake (spec.weight_label=5 reproduces them).
+# conditioning.BLADE_LABEL was 5 (the HUB) until 2026-10-05 and is 7 now; the
+# first Polytron checkpoints oversampled the hub by mistake (a stored
+# spec.weight_label=5 reproduces them).
 OGRID_LABEL = 7
 N_LABELS = 7
 
@@ -106,7 +107,7 @@ class PolytronSpec:
     curve_max: float = 2.0          # |offset| clip, in chord lengths
     curve_mu: float = 50.0          # mu-law companding strength
     seam_cloud: bool = False        # cloud always carries every seam point
-    weight_label: int = 5           # patch drawn `blade_weight` x as often
+    weight_label: int = 7           # patch drawn `blade_weight` x as often (7 = O-grid cut)
 
     def to_json(self) -> dict:
         return dict(lo=list(self.lo), hi=list(self.hi), q_vert=self.q_vert,

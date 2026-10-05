@@ -7,7 +7,7 @@ edge_index[2,E]) -> HexaRowTokenizer polar + cart.
 
 Split GEOM-disjunkt via conditioning.split_by_geometry (90/10, seed 0),
 nicht positional wie im alten Script. Items tragen name, geom_id, grid_id,
-tokens, blocks plus surface_points + is_blade (Blade-Label 5) fuer die
+tokens, blocks plus surface_points + is_blade (Blade = O-Grid-Schnitt, Label 7) fuer die
 gewichtete Konditionierung.
 
   uv run python scripts/build_family_tokens.py

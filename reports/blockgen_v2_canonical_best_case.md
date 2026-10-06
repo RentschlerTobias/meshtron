@@ -1,7 +1,7 @@
 # Block generator v2 — canonical-topology best case (2026-10-06)
 
 Data: `build_dataset.py --topo 49a0142abb` = only topo 12bl/49a0142abb (337 samples, train 303 / val 34).
-Models trained to overfit on purpose (last checkpoint). Chain: `scripts/blockgen_v2/infer_chain_v2.py`; driver `scripts/blockgen_v2/runs/best_case.sh`
+Models trained to overfit on purpose (last checkpoint). Chain: `scripts/blockgen_v2/infer_chain_v2.py`; driver `scripts/blockgen_v2/drivers/best_case.sh`
 (vertex -> pointer conn -> snap -> curve head -> curved TFI, h = 0.08), 34 train + 34 val items.
 
 ## Bug found and fixed: curve head vertex/block order

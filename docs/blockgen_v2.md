@@ -13,7 +13,7 @@ core blocks only — the blade is always inserted after generation with the exac
 | `scripts/blockgen_v2/infer_chain_v2.py` | vertex -> conn -> snap -> curve head -> curved TFI, with GT / mean-template / curve-only variants; mesh metrics + R_mesh |
 | `scripts/blockgen_v2/probe_conditioning.py` | does the vertex model use its point cloud |
 | `scripts/blockgen_v2/probe_chain_sensitivity.py` | chain response to corner noise |
-| `scripts/blockgen_v2/runs/grid.sh`, `best_case.sh` | the two experiment drivers |
+| `scripts/blockgen_v2/drivers/grid.sh`, `best_case.sh` | the two experiment drivers |
 | `scripts/blockgen_v2/_paths.py` | env defaults: `BLOCKGEN_SAMPLES`, `BLOCKGEN_AUDIT`, `BLOCKGEN_WORK`, `BLOCKGEN_FEATURE_CACHE` |
 
 Results: `reports/blockgen_v2_night_grid.md` (all 351 audit-ok samples) and

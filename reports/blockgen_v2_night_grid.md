@@ -2,7 +2,7 @@
 
 Setup: model meshtron/model/blockgen.py, trainer meshtron/training/train_blockgen.py, dataset
 scripts/blockgen_v2/build_dataset.py on the beam-relabelled n2000 samples (domain_partition_3D
-experimentell/hex3d_algohex/relabel/), driver scripts/blockgen_v2/runs/grid.sh.
+experimentell/hex3d_algohex/relabel/), driver scripts/blockgen_v2/drivers/grid.sh.
 
 ## Relabel / audit
 - 369/369 n2000 samples relabelled (beam collapse), 0 lane failures; 351 ok, 18 rejected

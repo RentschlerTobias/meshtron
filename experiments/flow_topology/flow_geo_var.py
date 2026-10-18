@@ -91,6 +91,61 @@ def item_graph(it):
     return it["g"]
 
 
+def permute_item(it, rng):
+    """Same item with randomly renumbered corners: conn / edges renumbered, edges re-sorted (a < b), the two
+    Bezier offset halves swapped where an edge flips direction; cached graph features permuted alongside."""
+    g = item_graph(it)
+    M = len(it["verts"])
+    perm = rng.permutation(M)                                   # new id -> old id
+    inv = np.empty(M, np.int64); inv[perm] = np.arange(M)       # old id -> new id
+    E = it["edges"].long().numpy()
+    En = inv[E]; flip = En[:, 0] > En[:, 1]; En = np.sort(En, 1)
+    oe = np.lexsort((En[:, 1], En[:, 0]))                       # new edge j <- old edge oe[j]
+    O = it["eoff"].clone()
+    O[torch.as_tensor(flip)] = torch.cat([O[torch.as_tensor(flip)][:, 3:], O[torch.as_tensor(flip)][:, :3]], 1)
+    out = dict(it)
+    out["verts"] = it["verts"][torch.as_tensor(perm)]
+    out["vlab"] = it["vlab"][torch.as_tensor(perm)]
+    out["conn"] = torch.as_tensor(inv[it["conn"].long().numpy()])
+    out["edges"] = torch.as_tensor(En[oe])
+    out["eoff"] = O[torch.as_tensor(oe)]
+    out["elab"] = it["elab"][torch.as_tensor(oe)]
+    if "feature" in it:
+        out["feature"] = it["feature"][torch.as_tensor(oe)]
+    idx = torch.as_tensor(np.concatenate([perm, M + oe]))
+    out["g"] = {"vfeat": g["vfeat"][torch.as_tensor(perm)], "efeat": g["efeat"][torch.as_tensor(oe)],
+                "hop": g["hop"][idx][:, idx], "M": g["M"], "E": g["E"]}
+    for k in ("kv", "ke"):
+        out.pop(k, None)
+    return out
+
+
+def geo_corners(it):
+    """Corners on >= 3 surface patches (seam junctions): known exactly from the geometry."""
+    return it["vlab"].sum(1) >= 2.5
+
+
+def known_masks(it, rng, policy):
+    """(kv [M], ke [E]) bool masks of tokens fed as known.
+    'all': geometric corners + feature edges; 'none'; 'recipe' (training): 60 % all, 20 % a random half of
+    them, 10 % all + 10 % of the other edges, 10 % none."""
+    M, E = len(it["verts"]), len(it["edges"])
+    gv = geo_corners(it)
+    fe = it["feature"].bool() if "feature" in it else torch.zeros(E, dtype=torch.bool)
+    if policy == "none":
+        return torch.zeros(M, dtype=torch.bool), torch.zeros(E, dtype=torch.bool)
+    if policy == "all":
+        return gv.clone(), fe.clone()
+    r = rng.random()
+    if r < 0.6:
+        return gv.clone(), fe.clone()
+    if r < 0.8:
+        return gv & torch.as_tensor(rng.random(M) < 0.5), fe & torch.as_tensor(rng.random(E) < 0.5)
+    if r < 0.9:
+        return gv.clone(), fe | torch.as_tensor(rng.random(E) < 0.1)
+    return torch.zeros(M, dtype=torch.bool), torch.zeros(E, dtype=torch.bool)
+
+
 class Norm:
     """Global normalisation: corners by the dataset box, offsets by one mean / std over all train edges."""
 
@@ -137,7 +192,10 @@ def collate(items, dev):
         hop[i, Mx:Mx + E, :M] = h[M:, :M]; hop[i, Mx:Mx + E, Mx:Mx + E] = h[M:, M:]
     V = pad([it["verts"].float() for it in items], 0.0, torch.float32)
     O = pad([it["eoff"].float() for it in items], 0.0, torch.float32)
-    return {k: x.to(dev) for k, x in dict(vf=vf, ef=ef, vm=vm, em=em, edges=edges, hop=hop, V=V, O=O).items()}
+    kv = pad([it.get("kv", torch.zeros(g["M"], dtype=torch.bool)) for it, g in zip(items, gs)], False, torch.bool)
+    ke = pad([it.get("ke", torch.zeros(g["E"], dtype=torch.bool)) for it, g in zip(items, gs)], False, torch.bool)
+    return {k: x.to(dev) for k, x in dict(vf=vf, ef=ef, vm=vm, em=em, edges=edges, hop=hop, V=V, O=O,
+                                          kv=kv, ke=ke).items()}
 
 
 # ----------------------------------------------------------------------- model
@@ -184,6 +242,9 @@ class FlowGeoVar(nn.Module):
         self.vtop = nn.Sequential(nn.Linear(vdim, d), nn.GELU(), nn.Linear(d, d))
         self.ein = nn.Linear(6 + 6, d)                       # offsets + current chord (midpoint, vector)
         self.etop = nn.Sequential(nn.Linear(edim, d), nn.GELU(), nn.Linear(d, d))
+        self.kflag_v, self.kflag_e = nn.Embedding(2, d), nn.Embedding(2, d)     # token is known (fixed)
+        for m in (self.kflag_v, self.kflag_e):
+            nn.init.zeros_(m.weight)
         self.hop = nn.Embedding(MAX_HOP + 1, heads)
         nn.init.zeros_(self.hop.weight)
         self.tmlp = nn.Sequential(nn.Linear(64, d), nn.SiLU(), nn.Linear(d, d))
@@ -207,6 +268,9 @@ class FlowGeoVar(nn.Module):
         Pb = torch.gather(xv, 1, ib[..., None].expand(-1, -1, 3))
         hv = self.vin(xv) + self.vtop(b["vf"])
         he = self.ein(torch.cat([xo, (Pa + Pb) / 2, Pb - Pa], -1)) + self.etop(b["ef"])
+        if "kv" in b:
+            hv = hv + self.kflag_v(b["kv"].long())
+            he = he + self.kflag_e(b["ke"].long())
         h = torch.cat([hv, he], 1)
         kmask = torch.cat([b["vm"], b["em"]], 1)
         bias = self.hop(b["hop"]).permute(0, 3, 1, 2)          # [B,heads,L,L]
@@ -219,14 +283,20 @@ class FlowGeoVar(nn.Module):
 
 
 @torch.no_grad()
-def sample(model, z, b, x0v, steps, gen=None):
-    """Euler integration from corners x0v (normalised, already noised) and noise offsets."""
+def sample(model, z, b, x0v, steps, gen=None, x1o_known=None):
+    """Euler integration from corners x0v (normalised, already noised; known corners clean) and noise offsets.
+    Known tokens (b['kv'], b['ke']; offsets from x1o_known, normalised) stay fixed at their values."""
     xv = x0v
     xo = torch.randn(*b["edges"].shape[:2], 6, device=z.device, generator=gen)
+    kv = b.get("kv"); ke = b.get("ke")
+    if ke is not None and x1o_known is not None:
+        xo = torch.where(ke[..., None], x1o_known, xo)
     for i in range(steps):
         t = torch.full((xv.shape[0],), i / steps, device=z.device)
         vv, vo = model(xv, xo, t, z, b)
-        xv, xo = xv + vv / steps, xo + vo / steps
+        xv2, xo2 = xv + vv / steps, xo + vo / steps
+        xv = torch.where(kv[..., None], xv, xv2) if kv is not None else xv2
+        xo = torch.where(ke[..., None], xo, xo2) if ke is not None else xo2
     return xv, xo
 
 
@@ -246,12 +316,17 @@ def item_errors(Vp, Op, Vg, Og, edges, vm, em):
 
 
 @torch.no_grad()
-def evaluate(model, nrm, items, sigma, steps, dev, bs=16, seed=1234, corners=None):
+def evaluate(model, nrm, items, sigma, steps, dev, bs=16, seed=1234, corners=None, known="none", permute=False):
     """Errors with input corners = GT + sigma noise (proxy for stage-1 corners) unless `corners` (list of
-    [M,3] tensors in dataset units) is given."""
+    [M,3] tensors in dataset units) is given. known: 'none' / 'all' (geometric corners + feature edges fed as
+    known GT tokens); permute: renumber the corners of every item at random first."""
     model.eval()
     gen = torch.Generator(device=dev); gen.manual_seed(seed)
-    acc = {"corner_in": [], "corner": [], "curve": [], "curve_gtc": []}
+    rng = np.random.default_rng(seed)
+    acc = {"corner_in": [], "corner": [], "curve": [], "curve_gtc": [], "curve_gtc_free": []}
+    if permute:
+        items = [permute_item(it, rng) for it in items]
+    items = [dict(it, **dict(zip(("kv", "ke"), known_masks(it, rng, known)))) for it in items]
     for i in range(0, len(items), bs):
         chunk = items[i:i + bs]
         b = collate(chunk, dev)
@@ -262,12 +337,19 @@ def evaluate(model, nrm, items, sigma, steps, dev, bs=16, seed=1234, corners=Non
             x0v = x1v + sigma * torch.randn(x1v.shape, device=dev, generator=gen)
         else:
             x0v = nrm.enc_v(pad([c.float() for c in corners[i:i + bs]], 0.0, torch.float32).to(dev))
-        xv, xo = sample(model, z, b, x0v, steps, gen)
+        x0v = torch.where(b["kv"][..., None], x1v, x0v)
+        xv, xo = sample(model, z, b, x0v, steps, gen, x1o_known=nrm.enc_o(b["O"]))
         Vp, Op = nrm.dec_v(xv), nrm.dec_o(xo)
         Vin = nrm.dec_v(x0v)
         for (c, cu, g), (ci, _, _) in zip(item_errors(Vp, Op, b["V"], b["O"], b["edges"], b["vm"], b["em"]),
                                           item_errors(Vin, Op, b["V"], b["O"], b["edges"], b["vm"], b["em"])):
             acc["corner"].append(c); acc["curve"].append(cu); acc["curve_gtc"].append(g); acc["corner_in"].append(ci)
+        # curve shape on GT corners over the FREE edges only (known edges are exact by construction)
+        free = b["em"] & ~b["ke"]
+        for j in range(len(chunk)):
+            e = b["edges"][j]
+            d = (bezier_pts(b["V"][j:j + 1], Op[j:j + 1], e) - bezier_pts(b["V"][j:j + 1], b["O"][j:j + 1], e)).norm(dim=-1).mean(-1)[0] * 1000
+            acc["curve_gtc_free"].append(float(d[free[j]].mean()))
     return {k: float(np.median(v)) for k, v in acc.items()} | {"n": len(items)}
 
 
@@ -283,7 +365,9 @@ def build(data, train, a, dev):
 def load(ckpt, data, dev="cuda"):
     ck = torch.load(ckpt, weights_only=False); a = ck["args"]
     model, nrm = build(data, data["train"], a, dev)
-    model.load_state_dict(ck["model"]); model.eval()
+    missing, unexpected = model.load_state_dict(ck["model"], strict=False)
+    assert not unexpected and all(k.startswith("kflag") for k in missing), (missing, unexpected)
+    model.eval()
     return model, nrm, a
 
 
@@ -306,8 +390,23 @@ def main():
                     help="corner source noise in dataset units (~ stage-1 corner error 0.05)")
     ap.add_argument("--curve-weight", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--perm-aug", action="store_true", help="renumber the corners of every training item at random")
+    ap.add_argument("--mask-policy", choices=("none", "recipe"), default="none",
+                    help="known-token masks in training (geometric corners + feature edges)")
+    ap.add_argument("--eval-ckpt", default=None, help="only evaluate this checkpoint (known x permutation matrix)")
     a = ap.parse_args()
     torch.manual_seed(a.seed); rng = np.random.default_rng(a.seed)
+    if a.eval_ckpt:
+        data = torch.load(a.data, weights_only=False)
+        model, nrm, ma = load(a.eval_ckpt, data)
+        sig = ma["sigma"] / float(nrm.s.mean())
+        summ = {f"{sp}|known={kn}|perm={int(pm)}": evaluate(model, nrm, data[sp], sig, ma["steps"], "cuda", known=kn, permute=pm)
+                for sp in ["val"] + [k for k in data if k.startswith("val_") and data[k]]
+                for kn in ("none", "all") for pm in (False, True)}
+        os.makedirs(a.out, exist_ok=True)
+        json.dump({"summary": summ}, open(f"{a.out}/result.json", "w"), indent=1)
+        print(f"[var] RESULT {json.dumps(summ)}", flush=True)
+        return
     dev = "cuda"
     data = torch.load(a.data, weights_only=False)
     tr, va = data["train"], data["val"]
@@ -328,6 +427,9 @@ def main():
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1, (s + 1) / 500) * 0.5 * (1 + math.cos(math.pi * min(1, s / steps))))
 
     def loss_on(chunk):
+        if a.perm_aug:
+            chunk = [permute_item(it, rng) for it in chunk]
+        chunk = [dict(it, **dict(zip(("kv", "ke"), known_masks(it, rng, a.mask_policy)))) for it in chunk]
         b = collate(chunk, dev)
         pts, pmask = batch_points(chunk, dev)
         x1v, x1o = nrm.enc_v(b["V"]), nrm.enc_o(b["O"])
@@ -335,14 +437,15 @@ def main():
         with torch.autocast("cuda", dtype=torch.bfloat16):
             z = model.enc(pts, pmask)
             t = torch.sigmoid(torch.randn(B, device=dev))
-            x0v = x1v + sig * torch.randn_like(x1v)
-            x0o = torch.randn_like(x1o)
+            x0v = torch.where(b["kv"][..., None], x1v, x1v + sig * torch.randn_like(x1v))   # known: clean at all t
+            x0o = torch.where(b["ke"][..., None], x1o, torch.randn_like(x1o))
             tv = t[:, None, None]
             pv, po = model((1 - tv) * x0v + tv * x1v, (1 - tv) * x0o + tv * x1o, t, z, b)
-        vm, em = b["vm"][..., None].float(), b["em"][..., None].float()
+        # loss only on the free tokens
+        vm = (b["vm"] & ~b["kv"])[..., None].float(); em = (b["em"] & ~b["ke"])[..., None].float()
         # corner velocity target is O(sigma): scale so both parts carry comparable weight
-        lv = (((pv.float() - (x1v - x0v)) / sig) ** 2 * vm).sum() / (vm.sum() * 3)
-        lo_ = ((po.float() - (x1o - x0o)) ** 2 * em).sum() / (em.sum() * 6)
+        lv = (((pv.float() - (x1v - x0v)) / sig) ** 2 * vm).sum() / (vm.sum().clamp(min=1) * 3)
+        lo_ = ((po.float() - (x1o - x0o)) ** 2 * em).sum() / (em.sum().clamp(min=1) * 6)
         return lv, lo_
 
     hist, t0 = [], time.time()
@@ -364,6 +467,15 @@ def main():
             print(f"[var] ep {ep:5d} loss v {tot[0]/nb:.4f} c {tot[1]/nb:.4f} | val corner in {ev['corner_in']:.1f} "
                   f"-> {ev['corner']:.1f} curve {ev['curve']:.1f} gtc {ev['curve_gtc']:.1f} ({time.time()-t0:.0f}s)", flush=True)
     torch.save({"model": ema.state_dict(), "args": vars(a)}, f"{a.out}/last.pt")
+    summ = {}
+    for sp in ["val"] + [k for k in data if k.startswith("val_") and data[k]]:
+        for kn in ("none", "all"):
+            for pm in (False, True):
+                summ[f"{sp}|known={kn}|perm={int(pm)}"] = evaluate(ema, nrm, data[sp], sig, a.steps, dev,
+                                                                     known=kn, permute=pm)
+    print(f"[var] RESULT {json.dumps(summ)}", flush=True)
+    json.dump({"summary": summ, "history": hist}, open(f"{a.out}/result.json", "w"), indent=1)
+    return
     summ = {"val": evaluate(ema, nrm, va, sig, a.steps, dev)}
     for sp in [k for k in data if k.startswith("val_") and data[k]]:      # val_new, val_full, ...
         summ[sp] = evaluate(ema, nrm, data[sp], sig, a.steps, dev)

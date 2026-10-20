@@ -113,10 +113,18 @@ def matched_error(P, G):
 
 
 @torch.no_grad()
-def evaluate(model, nrm, items, steps, dev, bs=16, seed=1234, n_samples=1):
+def min_pair_rel(P, it):
+    """Smallest corner-corner distance relative to the diagonal of the item's point cloud box."""
+    D = torch.cdist(P.double(), P.double()); D.fill_diagonal_(float("inf"))
+    pts = it["points"][:, :3].double()
+    return float(D.min()) / float((pts.max(0).values - pts.min(0).values).norm())
+
+
+@torch.no_grad()
+def evaluate(model, nrm, items, steps, dev, bs=16, seed=1234, n_samples=1, dup_thr=4.8e-3):
     model.eval()
     gen = torch.Generator(device=dev); gen.manual_seed(seed)
-    acc = {"corner": [], "corner_gtn": [], "count_ok": [], "corner_best": []}
+    acc = {"corner": [], "corner_gtn": [], "count_ok": [], "corner_best": [], "dup": []}
     for i in range(0, len(items), bs):
         chunk = items[i:i + bs]
         pts, pmask = batch_points(chunk, dev)
@@ -130,9 +138,10 @@ def evaluate(model, nrm, items, steps, dev, bs=16, seed=1234, n_samples=1):
             acc["corner"].append(matched_error(nrm.dec_v(samp[j]), G))
             errs = [matched_error(nrm.dec_v(s[j]), G) for s in samp_gt]
             acc["corner_gtn"].append(errs[0]); acc["corner_best"].append(min(errs))
+            acc["dup"] += [float(min_pair_rel(nrm.dec_v(s_[j]), it) < dup_thr) for s_ in samp_gt]
             acc["count_ok"].append(float(n_pred[j] == n_gt[j]))
     return {"corner": float(np.median(acc["corner"])), "corner_gtn": float(np.median(acc["corner_gtn"])),
-            "corner_best": float(np.median(acc["corner_best"])), "count_acc": float(np.mean(acc["count_ok"])),
+            "corner_best": float(np.median(acc["corner_best"])), "count_acc": float(np.mean(acc["count_ok"])), "dup_rate": float(np.mean(acc["dup"])),
             "n": len(items)}
 
 
@@ -161,6 +170,12 @@ def main():
     ap.add_argument("--steps", type=int, default=32)
     ap.add_argument("--count-weight", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--x1-weight", type=float, default=0.0,
+                    help="weight of the end-point set loss: two-sided Chamfer of x1_hat = x_t + (1-t) v to the GT "
+                         "corners, weighted by t (a missing / doubled corner costs, unlike in the per-token loss)")
+    ap.add_argument("--t-dist", default="logitnormal", choices=["logitnormal", "mix_late"],
+                    help="mix_late: half logit-normal, half density 2t (more training close to t = 1)")
+    ap.add_argument("--dup-thr", type=float, default=4.8e-3)
     a = ap.parse_args()
     torch.manual_seed(a.seed); rng = np.random.default_rng(a.seed)
     dev = "cuda"
@@ -191,12 +206,25 @@ def main():
         with torch.autocast("cuda", dtype=torch.bfloat16):
             z = model.enc(pts, pmask)
             t = torch.sigmoid(torch.randn(B, device=dev))
+            if a.t_dist == "mix_late":
+                late = torch.rand(B, device=dev) < 0.5
+                t = torch.where(late, torch.rand(B, device=dev).sqrt(), t)
             tv = t[:, None, None]
-            pv = model((1 - tv) * x0 + tv * x1, t, z, vmask)
+            xt = (1 - tv) * x0 + tv * x1
+            pv = model(xt, t, z, vmask)
             logits = model.count_logits(z)
         m = vmask[..., None].float()
         lv = ((pv.float() - (x1 - x0)) ** 2 * m).sum() / (m.sum() * 3)
         lc = F.cross_entropy(logits.float(), n_gt)
+        if a.x1_weight > 0:
+            x1h = xt + (1 - tv) * pv.float()
+            D = torch.cdist(x1h, x1).pow(2)                                   # [B, n_pred, n_gt]
+            pm = vmask[:, :, None] & vmask[:, None, :]
+            D = D.masked_fill(~pm, float("inf"))
+            cov = D.min(1).values.masked_fill(~vmask, 0).sum(1) / vmask.sum(1)   # every GT corner covered
+            acc = D.min(2).values.masked_fill(~vmask, 0).sum(1) / vmask.sum(1)   # every token on a GT corner
+            lx = (t * (cov + acc)).mean()
+            lv = lv + a.x1_weight * lx
         return lv, lc
 
     hist, t0, best = [], time.time(), None
@@ -213,18 +241,19 @@ def main():
             tot += [float(lv.detach()), float(lc.detach())]
         if ep % a.eval_every == 0 or ep == a.epochs:
             nb = math.ceil(len(tr) / a.bs)
-            ev = evaluate(ema, nrm, va, a.steps, dev)
+            ev = evaluate(ema, nrm, va, a.steps, dev, dup_thr=a.dup_thr)
             hist.append({"epoch": ep, "loss_v": tot[0] / nb, "loss_count": tot[1] / nb, **ev})
             if best is None or ev["corner_gtn"] < best[0]:
                 best = (ev["corner_gtn"], ep)
                 torch.save({"model": ema.state_dict(), "args": vars(a), "epoch": ep}, f"{a.out}/best.pt")
             print(f"[vtx] ep {ep:5d} loss v {tot[0]/nb:.4f} n {tot[1]/nb:.4f} | val corner {ev['corner']:.1f} "
-                  f"(gt n {ev['corner_gtn']:.1f}) count acc {ev['count_acc']:.2f} ({time.time()-t0:.0f}s)", flush=True)
+                  f"(gt n {ev['corner_gtn']:.1f}) count acc {ev['count_acc']:.2f} dup {ev['dup_rate']:.3f} ({time.time()-t0:.0f}s)", flush=True)
     torch.save({"model": ema.state_dict(), "args": vars(a), "epoch": a.epochs}, f"{a.out}/last.pt")
     ck = torch.load(f"{a.out}/best.pt", weights_only=False); ema.load_state_dict(ck["model"])
-    summ = {"best_epoch": best[1], "val": evaluate(ema, nrm, va, a.steps, dev, n_samples=8)}
+    summ = {"best_epoch": best[1], "val": evaluate(ema, nrm, va, a.steps, dev, n_samples=8, dup_thr=a.dup_thr)}
     for sp in [k for k in data if k.startswith("val_") and data[k]]:      # val_new, val_full, ...
-        summ[sp] = evaluate(ema, nrm, data[sp], a.steps, dev, n_samples=8)
+        summ[sp] = evaluate(ema, nrm, data[sp], a.steps, dev, n_samples=8, dup_thr=a.dup_thr)
+        summ[sp + "_128"] = evaluate(ema, nrm, data[sp], 128, dev, n_samples=8, dup_thr=a.dup_thr)
     summ["train"] = evaluate(ema, nrm, tr[:34], a.steps, dev)
     summ.update(params_M=n_par / 1e6, n_train=len(tr), seed=a.seed, epochs=a.epochs, train_s=time.time() - t0)
     print(f"[vtx] RESULT {json.dumps(summ)}", flush=True)

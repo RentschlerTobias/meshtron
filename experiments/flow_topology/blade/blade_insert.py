@@ -46,10 +46,10 @@ def block_volume(X):
     return sum(np.dot(np.cross(X[b] - X[a], X[c] - X[a]), X[d] - X[a]) / 6 for a, b, c, d in TETS)
 
 
-def gt_post_structure(name):
+def gt_post_structure(name, sample_path=None, post_path=None):
     """GT block structure with the post-processed curves (seam arcs + G1 cubics): V, B, curves {(a,b): poly}."""
-    smp = np.load(f"{RUNS}/{name}/sample.npz", allow_pickle=True)
-    post = np.load(f"/work/curves_post/{name}_curves.npz")
+    smp = np.load(sample_path or f"{RUNS}/{name}/sample.npz", allow_pickle=True)
+    post = np.load(post_path or f"/work/curves_post/{name}_curves.npz")
     B = smp["blocks"]; V = post["post_vertices"]
     Eu, _, dmap = cp.undirected({k: smp[k] for k in smp.files})
     pc = np.zeros((len(Eu), 2, 3)); arcs = {}

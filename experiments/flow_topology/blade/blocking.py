@@ -41,6 +41,7 @@ import tfi_param as TP  # noqa: E402
 from meshtron.geometry.polytron_tfi import SurfaceProjector, _arclength, _boundary_labels  # noqa: E402
 
 NS = 129                                                  # samples per mapped edge
+HEXE = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7))
 
 
 class Geo:
@@ -153,7 +154,95 @@ def index_resample(Q, n):
     return np.stack([np.interp(t, u, Q[:, d]) for d in range(3)], 1)
 
 
-def build(V, B, curves, raw, geo, n_layers=8, growth=1.2, verbose=True):
+def ray_onto(geo, X, D, lab, k=64):
+    """First intersection of the rays X + s D (s > 0) with patch `lab` (faceted); nearest point if none."""
+    X = np.asarray(X, float).reshape(-1, 3); D = np.asarray(D, float).reshape(-1, 3)
+    D = D / np.linalg.norm(D, axis=1, keepdims=True).clip(1e-12)
+    Tl = geo.T[geo.L == lab]; A0, B0_, C0 = (geo.P[Tl[:, i]] for i in range(3))
+    tree = cKDTree((A0 + B0_ + C0) / 3)
+    near = geo.near.onto(X, [lab]); h = np.linalg.norm(near - X, axis=1)
+    out = near.copy()
+    for i in range(len(X)):
+        S = X[i] + np.linspace(0, 4 * h[i] + 1e-6, 24)[:, None] * D[i]
+        cand = sorted({j for lst in tree.query_ball_point(S, r=max(2 * h[i], 0.05)) for j in lst})
+        if not cand:
+            continue
+        a, b, c = A0[cand], B0_[cand], C0[cand]
+        e1, e2 = b - a, c - a; pv = np.cross(D[i], e2); det = (e1 * pv).sum(1)
+        ok = np.abs(det) > 1e-14; inv = np.where(ok, 1 / np.where(ok, det, 1), 0)
+        tv = X[i] - a; u = (tv * pv).sum(1) * inv; qv = np.cross(tv, e1); v = (qv @ D[i]) * inv; s = (qv * e2).sum(1) * inv
+        hit = ok & (u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9) & (s > 1e-9)
+        if hit.any():
+            out[i] = X[i] + s[hit].min() * D[i]
+    return out
+
+
+def extrapolate_cut(V, B0, curves, param, faces, Fk, corners, v2l, e2l, c, wall, labs_of, geo, tk):
+    """Wall corners / edges of a cut by extrapolating the core block edges through the cut onto the wall:
+    corner -> along the tangent of the core edge(s) entering it; cut-edge points -> along the blend of the two
+    corner directions (Coons-like). On a seam with a side patch (hub / shroud) the ray direction is taken in
+    that patch's tangent plane and the hit is put on the seam."""
+    cut_v = {v for k in Fk for v in faces[k][0]}
+    cut_e = {(min(a, b), max(a, b)) for k in Fk for a, b in zip(faces[k][0], faces[k][0][1:] + faces[k][0][:1])}
+    dirs = {}
+    for v in corners:
+        ds = []
+        for b in B0:
+            if v not in b:
+                continue
+            for i, j in HEXE:
+                if v in (b[i], b[j]):
+                    u = b[j] if b[i] == v else b[i]
+                    key = (min(u, v), max(u, v))
+                    if key in cut_e:
+                        continue
+                    Q = curves.get(key)
+                    Q = np.array([V[key[0]], V[key[1]]]) if Q is None else np.asarray(Q, float)
+                    Qv = Q if key[0] == v else Q[::-1]            # from v into the core
+                    t = Qv[0] - Qv[min(3, len(Qv) - 1)]
+                    ds.append(t / np.linalg.norm(t))
+        dirs[v] = np.mean(ds, 0) if ds else None
+    wmap, moved = {}, []
+    side_of = {}
+    for v in corners:
+        labs = labs_of(v2l[v]); side = [t for t in labs if t != wall]; side_of[v] = side
+        d = dirs[v]
+        if d is None:
+            q = geo.near.onto(V[v][None], [wall])[0]
+        else:
+            if side:                                          # keep the ray in the side patch's tangent plane
+                n = geo.near.onto(V[v][None] + 1e-3 * d, side)[0] - geo.near.onto(V[v][None], side)[0]
+                d = n if np.linalg.norm(n) > 1e-9 else d
+            q = ray_onto(geo, V[v][None], d[None], wall)[0]
+            if side:
+                q = geo.onto(q[None], sorted(set(side) | {wall}))[0]
+        wmap[v] = len(V); V.append(q); moved.append(float(np.linalg.norm(q - V[v])))
+        X = (1 - tk[:, None]) * V[v] + tk[:, None] * q
+        if side:
+            X[1:-1] = geo.onto(X[1:-1], side)
+        curves[(v, wmap[v])] = X; param.add((v, wmap[v]))
+    for key in sorted(cut_e):
+        a, b = key
+        wk = (min(wmap[a], wmap[b]), max(wmap[a], wmap[b]))
+        if wk in curves:
+            continue
+        Q = curves.get(key)
+        Q = np.linspace(V[a], V[b], NS) if Q is None else np.asarray(Q, float)
+        Q = index_resample(Q, NS) if key in param else _arclength(Q, NS)
+        da = V[wmap[a]] - V[a]; db = V[wmap[b]] - V[b]
+        t = np.linspace(0, 1, NS)[:, None]
+        D = (1 - t) * da / np.linalg.norm(da) + t * db / np.linalg.norm(db)
+        side = sorted((set(side_of[a]) & set(side_of[b])))
+        W = ray_onto(geo, Q, D, wall)
+        if side:
+            W = geo.onto(W, sorted(set(side) | {wall}))
+        W[0], W[-1] = V[wmap[a]], V[wmap[b]]
+        curves[wk] = W if wmap[a] < wmap[b] else W[::-1]
+        param.add(wk)
+    return wmap, moved
+
+
+def build(V, B, curves, raw, geo, n_layers=8, growth=1.2, verbose=True, extrapolate=False):
     S, T, L = raw["surface_points"], raw["surface_tris"], raw["surface_tri_label"]
     diagl = float(np.linalg.norm(np.ptp(S, 0)))
     core_proj = SurfaceProjector(S, T, L)
@@ -174,6 +263,7 @@ def build(V, B, curves, raw, geo, n_layers=8, growth=1.2, verbose=True):
             continue
         kind, x = cls[int(l)]
         faces[k] = (cyc_of[k], (kind, x))
+    B0 = [list(map(int, b)) for b in B]                        # the core blocks (for extrapolation)
     V = [np.asarray(v, float) for v in V]; B = [list(map(int, b)) for b in B]; part = [0] * len(B)
     curves = dict(curves); param = set(); radial_blocks = {}; LEVEL = {}; LEVEL_E = {}
 
@@ -226,113 +316,125 @@ def build(V, B, curves, raw, geo, n_layers=8, growth=1.2, verbose=True):
                 key = (min(a, b), max(a, b))
                 if any(m[0] == "cut" and m != c and m not in done for m in e2l[key]):
                     LEVEL_E.setdefault(key, phys_labs)
-        wmap, moved, shifts = {}, [], []
-        free = []
-        for v in corners:
-            labs = labs_of(v2l[v]); side = [t for t in labs if t != wall]
-            if side:
-                pth = descend(geo, V[v][None], side, wall)[:, 0]
-                q = pth[-1]
-                shifts.append((V[v], q - geo.near.onto(V[v][None], [wall])[0]))
-            elif v in LEVEL:
-                q = level_onto(geo, V[v][None], wall, LEVEL[v][0], LEVEL[v][1])[0]
-                pth = np.linspace(V[v], q, 25)
-            else:
-                free.append(v); continue
-            wmap[v] = len(V); V.append(q); moved.append(float(np.linalg.norm(q - V[v])))
-            X = graded_path(pth, tk); X[0], X[-1] = V[v], q            # radial edge, graded towards the wall
-            curves[(v, wmap[v])] = X; param.add((v, wmap[v]))
-        # edges in two passes: constrained ones (seams with side geometry, level) give dense displacement
-        # samples; free corners / edges then get the same displacement field interpolated (relative distances
-        # to the seams are kept -- the core ring around the O-ring and the O-ring footprint cannot collide)
-        samp_x, samp_d = [], []
-        # harmonic surface map of this cut (if it is a core patch of the sample surface)
-        smap = None
-        core_l = [l for l, cc in cls.items() if cc == c]
-        if core_l and c in layer_cuts:                # layer cuts only; the enclosed cut keeps its level rules
-            import surfmap as SM
-            Tc = T[L == core_l[0]]
-            vlab_s = defaultdict(set)
-            for t, l in zip(T, L):
-                if int(l) != core_l[0]:
-                    for v in t:
-                        vlab_s[int(v)].add(cls[int(l)])
-
-            # boundary labels of the patch's boundary, by nearest vertex of the original triangulation
-            bverts = np.unique(Tc); btree = cKDTree(S[bverts])
-
-            def bimg(X0):
-                X0 = np.asarray(X0, float)
-                _, j = btree.query(X0)
-                # a refined boundary point takes the labels common to the two nearest original boundary vertices
-                _, j2 = btree.query(X0, k=2)
-                out = np.zeros((len(X0), 3)); groups = defaultdict(list)
-                for i in range(len(X0)):
-                    a, b = int(bverts[j2[i, 0]]), int(bverts[j2[i, 1]])
-                    ls = (vlab_s[a] & vlab_s[b]) or vlab_s[a]
-                    groups[tuple(sorted(labs_of(ls)))].append(i)
-                for labs, ii in groups.items():
-                    side = [t for t in labs if t != wall]
-                    if side:
-                        out[ii] = descend(geo, X0[ii], side, wall)[-1]
-                    else:
-                        out[ii] = geo.onto(foot_union(geo, X0[ii], phys_labs), [wall])
-                return out
-            smap = SM.SurfaceMap(S, Tc, bimg)
-        for v in corners:
-            if v in wmap:
-                samp_x.append(V[v]); samp_d.append(V[wmap[v]] - foot_union(geo, V[v][None], phys_labs)[0])
-
-        def idw(X, p=4.0):
-            X = np.asarray(X, float).reshape(-1, 3)
-            if not samp_x:
-                return np.zeros_like(X)
-            S0 = np.array(samp_x); Sd = np.array(samp_d)
-            out = np.zeros_like(X)
-            for i0_ in range(0, len(X), 512):
-                D = np.linalg.norm(X[i0_:i0_ + 512, None] - S0[None], axis=2)
-                w = 1.0 / np.maximum(D, 1e-9) ** p
-                out[i0_:i0_ + 512] = (w @ Sd) / w.sum(1, keepdims=True)
-            return out
-        edges = []
-        for k in Fk:
-            cyc = faces[k][0]
-            for a, b in zip(cyc, cyc[1:] + cyc[:1]):
-                key = (min(a, b), max(a, b))
-                if key not in [e for e, _ in edges]:
-                    side = [t for t in labs_of(e2l[key] - {c}) if t != wall]
-                    edges.append((key, bool(side) or key in LEVEL_E))
-        for pass_constrained in (True, False):
-            if not pass_constrained:
-                for v in free:                                # free corners: interpolated displacement
-                    q = geo.onto(smap(V[v][None]) if smap is not None else
-                                 foot_union(geo, V[v][None], phys_labs) + idw(V[v][None]), [wall])[0]
-                    wmap[v] = len(V); V.append(q); moved.append(float(np.linalg.norm(q - V[v])))
-                    X = (1 - tk[:, None]) * V[v] + tk[:, None] * q
-                    curves[(v, wmap[v])] = X; param.add((v, wmap[v]))
-            for key, constrained in edges:
-                if constrained != pass_constrained:
-                    continue
-                wk = (min(wmap[key[0]], wmap[key[1]]), max(wmap[key[0]], wmap[key[1]]))
-                if wk in curves:
-                    continue
-                Q = curves.get(key)
-                Q = np.linspace(V[key[0]], V[key[1]], NS) if Q is None else np.asarray(Q, float)
-                Q = index_resample(Q, NS) if key in param else _arclength(Q, NS)
-                lv = None
-                if key in LEVEL_E and not [t for t in labs_of(e2l[key] - {c}) if t != wall]:
-                    rl = LEVEL_E[key]
-                    dq = geo.near.dists(Q)[:, [geo.near.labels.index(l) for l in rl]].min(1)
-                    lv = (rl, dq)
-                if smap is not None and not constrained:          # free edge on the cut: harmonic map
-                    W = geo.onto(smap(Q), [wall]); W[0], W[-1] = V[wmap[key[0]]], V[wmap[key[1]]]
+        if extrapolate:                                   # O-ring edges extrapolated from the core blocks
+            wmap, moved = extrapolate_cut(V, B0, curves, param, faces, Fk, corners, v2l, e2l, c, wall, labs_of,
+                                          geo, tk)
+        else:
+            wmap, moved, shifts = {}, [], []
+            free = []
+            for v in corners:
+                labs = labs_of(v2l[v]); side = [t for t in labs if t != wall]
+                if side:
+                    pth = descend(geo, V[v][None], side, wall)[:, 0]
+                    q = pth[-1]
+                    shifts.append((V[v], q - geo.near.onto(V[v][None], [wall])[0]))
+                elif v in LEVEL:
+                    q = level_onto(geo, V[v][None], wall, LEVEL[v][0], LEVEL[v][1])[0]
+                    pth = np.linspace(V[v], q, 25)
                 else:
-                    W = map_curve(geo, Q, labs_of(e2l[key] - {c}), V[wmap[key[0]]], V[wmap[key[1]]], wall,
-                                  shift=idw, level=lv, foot=lambda X: foot_union(geo, X, phys_labs))
-                curves[wk] = W if wmap[key[0]] < wmap[key[1]] else W[::-1]
-                param.add(wk)
-                if pass_constrained:
-                    samp_x.extend(Q[1:-1]); samp_d.extend(W[1:-1] - foot_union(geo, Q[1:-1], phys_labs))
+                    free.append(v); continue
+                wmap[v] = len(V); V.append(q); moved.append(float(np.linalg.norm(q - V[v])))
+                X = graded_path(pth, tk); X[0], X[-1] = V[v], q            # radial edge, graded towards the wall
+                curves[(v, wmap[v])] = X; param.add((v, wmap[v]))
+            # edges in two passes: constrained ones (seams with side geometry, level) give dense displacement
+            # samples; free corners / edges then get the same displacement field interpolated (relative distances
+            # to the seams are kept -- the core ring around the O-ring and the O-ring footprint cannot collide)
+            samp_x, samp_d = [], []
+            # harmonic surface map of this cut (if it is a core patch of the sample surface)
+            smap = None
+            core_l = [l for l, cc in cls.items() if cc == c]
+            tube = None
+            try:
+                import tubeparam as TPm
+                tube = TPm.TubeParam(geo.P, geo.T[geo.L == wall])
+            except ValueError:
+                tube = None
+            if core_l and c in layer_cuts and tube is None:  # layer cuts only; walls that are tubes use their own map
+                import surfmap as SM
+                Tc = T[L == core_l[0]]
+                vlab_s = defaultdict(set)
+                for t, l in zip(T, L):
+                    if int(l) != core_l[0]:
+                        for v in t:
+                            vlab_s[int(v)].add(cls[int(l)])
+
+                # boundary labels of the patch's boundary, by nearest vertex of the original triangulation
+                bverts = np.unique(Tc); btree = cKDTree(S[bverts])
+
+                def bimg(X0):
+                    X0 = np.asarray(X0, float)
+                    _, j = btree.query(X0)
+                    # a refined boundary point takes the labels common to the two nearest original boundary vertices
+                    _, j2 = btree.query(X0, k=2)
+                    out = np.zeros((len(X0), 3)); groups = defaultdict(list)
+                    for i in range(len(X0)):
+                        a, b = int(bverts[j2[i, 0]]), int(bverts[j2[i, 1]])
+                        ls = (vlab_s[a] & vlab_s[b]) or vlab_s[a]
+                        groups[tuple(sorted(labs_of(ls)))].append(i)
+                    for labs, ii in groups.items():
+                        side = [t for t in labs if t != wall]
+                        if side:
+                            out[ii] = descend(geo, X0[ii], side, wall)[-1]
+                        else:
+                            out[ii] = geo.onto(foot_union(geo, X0[ii], phys_labs), [wall])
+                    return out
+                smap = SM.SurfaceMap(S, Tc, bimg)
+            for v in corners:
+                if v in wmap:
+                    samp_x.append(V[v]); samp_d.append(V[wmap[v]] - foot_union(geo, V[v][None], phys_labs)[0])
+
+            def idw(X, p=4.0):
+                X = np.asarray(X, float).reshape(-1, 3)
+                if not samp_x:
+                    return np.zeros_like(X)
+                S0 = np.array(samp_x); Sd = np.array(samp_d)
+                out = np.zeros_like(X)
+                for i0_ in range(0, len(X), 512):
+                    D = np.linalg.norm(X[i0_:i0_ + 512, None] - S0[None], axis=2)
+                    w = 1.0 / np.maximum(D, 1e-9) ** p
+                    out[i0_:i0_ + 512] = (w @ Sd) / w.sum(1, keepdims=True)
+                return out
+            edges = []
+            for k in Fk:
+                cyc = faces[k][0]
+                for a, b in zip(cyc, cyc[1:] + cyc[:1]):
+                    key = (min(a, b), max(a, b))
+                    if key not in [e for e, _ in edges]:
+                        side = [t for t in labs_of(e2l[key] - {c}) if t != wall]
+                        edges.append((key, bool(side) or key in LEVEL_E))
+            for pass_constrained in (True, False):
+                if not pass_constrained:
+                    for v in free:                                # free corners: interpolated displacement
+                        q = geo.onto(smap(V[v][None]) if smap is not None else
+                                     foot_union(geo, V[v][None], phys_labs) + idw(V[v][None]), [wall])[0]
+                        wmap[v] = len(V); V.append(q); moved.append(float(np.linalg.norm(q - V[v])))
+                        X = (1 - tk[:, None]) * V[v] + tk[:, None] * q
+                        curves[(v, wmap[v])] = X; param.add((v, wmap[v]))
+                for key, constrained in edges:
+                    if constrained != pass_constrained:
+                        continue
+                    wk = (min(wmap[key[0]], wmap[key[1]]), max(wmap[key[0]], wmap[key[1]]))
+                    if wk in curves:
+                        continue
+                    Q = curves.get(key)
+                    Q = np.linspace(V[key[0]], V[key[1]], NS) if Q is None else np.asarray(Q, float)
+                    Q = index_resample(Q, NS) if key in param else _arclength(Q, NS)
+                    lv = None
+                    if key in LEVEL_E and not [t for t in labs_of(e2l[key] - {c}) if t != wall]:
+                        rl = LEVEL_E[key]
+                        dq = geo.near.dists(Q)[:, [geo.near.labels.index(l) for l in rl]].min(1)
+                        lv = (rl, dq)
+                    if tube is not None and not constrained:          # free edge on a tube wall: line in (u, s)
+                        W = tube.curve(V[wmap[key[0]]], V[wmap[key[1]]], NS)
+                    elif smap is not None and not constrained:        # free edge on the cut: harmonic map
+                        W = geo.onto(smap(Q), [wall]); W[0], W[-1] = V[wmap[key[0]]], V[wmap[key[1]]]
+                    else:
+                        W = map_curve(geo, Q, labs_of(e2l[key] - {c}), V[wmap[key[0]]], V[wmap[key[1]]], wall,
+                                      shift=idw, level=lv, foot=lambda X: foot_union(geo, X, phys_labs))
+                    curves[wk] = W if wmap[key[0]] < wmap[key[1]] else W[::-1]
+                    param.add(wk)
+                    if pass_constrained:
+                        samp_x.extend(Q[1:-1]); samp_d.extend(W[1:-1] - foot_union(geo, Q[1:-1], phys_labs))
         for k in Fk:
             cyc = faces[k][0]
             blk = list(cyc) + [wmap[v] for v in cyc]
@@ -385,20 +487,25 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--name", default="tistos_s1_0131")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--sample", default=None, help="sample.npz (default: datagen run of --name)")
+    ap.add_argument("--post", default=None, help="post-processed curves npz (default: /work/curves_post)")
+    ap.add_argument("--msh", default=None, help="dtOO case/mesh.msh (default: datagen run of --name)")
     ap.add_argument("--target-h", type=float, default=0.05)
     ap.add_argument("--layers", type=int, default=8)
     ap.add_argument("--growth", type=float, default=1.2)
     ap.add_argument("--relocate", action="store_true", help="slide cut-seam corners for block quality first")
     ap.add_argument("--min-gap", type=float, default=0.0, help="push core corners/edges away from cut|cut seams "
                     "to this fraction of the layer thickness before the blocking")
+    ap.add_argument("--extrapolate", action="store_true",
+                    help="wall corners / edges by extrapolating the core block edges through the cut (no projection)")
     ap.add_argument("--opt", type=int, default=0, help="iterations of the surrogate optimisation of the full blocking")
     ap.add_argument("--opt-n", type=int, default=9, help="surrogate samples per edge")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    raw = dict(np.load(f"{BI.RUNS}/{a.name}/sample.npz", allow_pickle=True))
-    P, T, L, info, rtype = MW.load_regions(f"{BI.RUNS}/{a.name}/case/mesh.msh")
+    raw = dict(np.load(a.sample or f"{BI.RUNS}/{a.name}/sample.npz", allow_pickle=True))
+    P, T, L, info, rtype = MW.load_regions(a.msh or f"{BI.RUNS}/{a.name}/case/mesh.msh")
     geo = Geo(P, T, L, info)
-    V, B, curves = BI.gt_post_structure(a.name)
+    V, B, curves = BI.gt_post_structure(a.name, a.sample, a.post)
     if a.min_gap > 0:
         import relocate as RL
         V, curves, grep_ = RL.widen_gaps(V, B, curves, raw, geo, a.min_gap)
@@ -408,7 +515,7 @@ def main():
         V, moved, movable = RL.relocate(V, B, curves, raw, geo)
         curves = RL.update_curves(V0, V, curves, raw, geo, B)
         print("[blocking] relocated corners:", {int(k): round(v, 3) for k, v in moved.items()}, flush=True)
-    V2, B2, cur2, part, param, radial, rep = build(V, B, curves, raw, geo, a.layers, a.growth)
+    V2, B2, cur2, part, param, radial, rep = build(V, B, curves, raw, geo, a.layers, a.growth, extrapolate=a.extrapolate)
     if a.opt:
         import opt_blocking as OB
         keep_l = [i for i, d in enumerate(info) if d["kind"] == "phys"]

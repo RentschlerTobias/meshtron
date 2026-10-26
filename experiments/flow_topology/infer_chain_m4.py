@@ -24,8 +24,8 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -43,7 +43,7 @@ from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from meshtron.geometry.polytron_tfi import SurfaceProjector  # noqa: E402
 from train import batch_points  # noqa: E402
 
-CP_PATH = "/work/dp3d_feature_curves/experimentell/hex3d_algohex/curve_postprocess.py"
+CP_PATH = "/opt/stack/dp3d_keep_bl/experimentell/hex3d_algohex/curve_postprocess.py"
 _spec = importlib.util.spec_from_file_location("curve_postprocess_fc", CP_PATH)
 cp = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(cp)
 HEX_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7))
@@ -222,13 +222,13 @@ def straight_sample(V, B, raw):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_full.pt")
-    ap.add_argument("--post-data", default="/work/meshtron_v2/data/flow_canon_full_post.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full.pt")
+    ap.add_argument("--post-data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full_post.pt")
     ap.add_argument("--split", default="val_full")
     ap.add_argument("--n", type=int, default=1000)
-    ap.add_argument("--vtx-ckpt", default="/work/meshtron_v2/runs/vtx_full_s0/best.pt")
-    ap.add_argument("--ptr-ckpt", default="/work/meshtron_v2/runs/ptr2_nolab/ep50.pt")
-    ap.add_argument("--var-ckpt", default="/work/meshtron_v2/runs/varm_mask_s0/last.pt")
+    ap.add_argument("--vtx-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/vtx_full_s0/best.pt")
+    ap.add_argument("--ptr-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/ptr2_nolab/ep50.pt")
+    ap.add_argument("--var-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/varm_mask_s0/last.pt")
     ap.add_argument("--k", type=int, default=8)
     ap.add_argument("--seam-mask", action="store_true", help="only consecutive seam corners may form a block edge")
     ap.add_argument("--names", default=None, help="comma-separated item names (subset)")

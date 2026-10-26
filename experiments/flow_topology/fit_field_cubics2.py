@@ -17,7 +17,7 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 sys.path.insert(0, "/opt/stack/domain_partition_3D/experimentell/hex3d_algohex")
 
 import meshio  # noqa: E402
@@ -34,7 +34,7 @@ from frame_field_tet import TetFrameField, cube_group  # noqa: E402
 from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 from meshtron.geometry.polytron_tfi import SurfaceProjector  # noqa: E402
 
-RUNS = "/work/datagen_full/datagen/runs"
+RUNS = "/opt/stack/meshtron/experiments/flow_topology/datagen/runs"
 
 
 def field_axes(ff, C_, G, misfit_deg):
@@ -99,7 +99,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     R = f"{RUNS}/{a.name}"
     smp = es.load(f"{R}/sample.npz")
-    post = np.load(f"/work/curves_post/{a.name}_curves.npz")
+    post = np.load(f"/opt/stack/meshtron/experiments/flow_topology/curves_post/{a.name}_curves.npz")
     raw = {k: smp[k] for k in ("surface_points", "surface_tris", "surface_tri_label")}
     ff = TetFrameField(f"{R}/tet.vtk", iters=200, verbose=False)
     G = cube_group()
@@ -114,7 +114,7 @@ def main():
             P = apl[ao[d]:ao[d + 1]]; arcs[k] = P[::-1] if rev else P
     S = smp["surface_points"]; tol = 6e-3 * np.linalg.norm(np.ptp(S, 0))
     vpatch = [set((np.flatnonzero(l) + 1).tolist()) for l in surface_multihot(Vp, raw, tol)]
-    fm = FeatureModelV2(f"{R}/sample.npz", cache_dir="/work/curve/features_v2")
+    fm = FeatureModelV2(f"{R}/sample.npz", cache_dir="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     det = C.detect(Vp, B, Eu, (pc[:, 0], pc[:, 1]), fm, vpatch)
     proj = SurfaceProjector(S, smp["surface_tris"], smp["surface_tri_label"])
     cnt, per = C.block_faces(B)

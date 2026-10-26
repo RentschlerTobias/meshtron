@@ -4,7 +4,7 @@
 Polytron stage 1 (vertex model, greedy) -> stage 2 (pointer net on the generated
 corners) -> snap all corners -> learned edge curves (curve head) -> curved TFI.
 Same mesh metrics as /work/curve/infer_chain_order.py (polytron_tfi.mesh_candidate)
-plus the post-TFI quality score of /work/rl_reward/mesh_quality.py.
+plus the post-TFI quality score of /opt/stack/meshtron/experiments/flow_topology/rl_reward/mesh_quality.py.
 
 Variants per item (one greedy rollout each):
   gen          generated corners + predicted connectivity            (the pipeline)
@@ -27,8 +27,8 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -44,7 +44,7 @@ from meshtron.geometry.polytron_tfi import mesh_candidate  # noqa: E402
 from meshtron.training.polytron_sample import predict_curves  # noqa: E402
 from meshtron.training.train_polytron import load_stage  # noqa: E402
 
-RELABEL = "/work/relabel/out"
+RELABEL = "/opt/stack/meshtron/experiments/flow_topology/relabel/out"
 VARIANTS = ("gen", "gen_nosnap", "gen_gtconn", "mean", "gt_canon_curves", "gt_curves", "gt")
 
 
@@ -82,7 +82,7 @@ def decode_conn(model, V, it, dev, max_steps):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/v2_canon.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/v2_canon.pt")
     ap.add_argument("--vertex", required=True)
     ap.add_argument("--conn", required=True)
     ap.add_argument("--curve", required=True)
@@ -90,7 +90,7 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=34)
     ap.add_argument("--target-h", type=float, default=0.08)
     ap.add_argument("--curve-n-points", type=int, default=2048)
-    ap.add_argument("--feature-cache", default="/work/curve/features_v2")
+    ap.add_argument("--feature-cache", default="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     ap.add_argument("--out-dir", required=True)
     a = ap.parse_args()
     dev = "cuda"

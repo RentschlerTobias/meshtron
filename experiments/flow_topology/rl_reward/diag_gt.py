@@ -1,6 +1,6 @@
 """Diagnose GT meshes: corner scaled Jacobians, degenerate edges, boundary faces off the surface."""
 import sys; import numpy as np, torch
-sys.path.insert(0, "/opt/stack/meshtron"); sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron"); sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
 from meshtron.training.generate import detokenize_safe
 from meshtron.geometry.mesh_validation import validate_generated_mesh

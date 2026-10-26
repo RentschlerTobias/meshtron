@@ -13,7 +13,7 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 from flow_geo import FlowGeo, Topology, evaluate  # noqa: E402
 
 ap = argparse.ArgumentParser()

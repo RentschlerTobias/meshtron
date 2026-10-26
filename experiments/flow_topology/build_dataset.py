@@ -1,8 +1,8 @@
 """Build the v2 training set from the beam-relabelled samples.
 
-Per sample (only rows with ok=True in /work/relabel/audit.csv):
+Per sample (only rows with ok=True in /opt/stack/meshtron/experiments/flow_topology/relabel/audit.csv):
   tokens   HexaRow cart tokens in the topology-canonical row order
-           (/work/meshtron_topo, --merge-cut-labels semantics)
+           (/opt/stack/meshtron/experiments/flow_topology/topo_tokens, --merge-cut-labels semantics)
   points   ALL surface points, [P, 4 + 7] float16:
            (r', sin th, cos th, z') + multi-hot of the incident surface labels
            1..7 (7 = O-grid cut = blade, see meshtron conditioning.SURFACE_LABELS)
@@ -18,7 +18,7 @@ Other sample sources (e.g. the new tistos_s1 runs): --src-root <dir with <name>/
 --audit <its audit.csv>; --bounds-from <existing .pt> reuses that set's r/z bounds so both
 sets share the same normalisation.
 
-    python build_dataset.py --out /work/meshtron_v2/data/v2_cart.pt
+    python build_dataset.py --out /opt/stack/meshtron/experiments/flow_topology/data/v2_cart.pt
 """
 import argparse
 import csv
@@ -29,13 +29,13 @@ import numpy as np
 import torch
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_topo")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/topo_tokens")
 from meshtron.data import conditioning as C  # noqa: E402
 from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer  # noqa: E402
 from build_topo_tokens import load  # noqa: E402
 from topo_row_plan import build_row_plan_topo  # noqa: E402
 
-OUT = "/work/relabel/out"
+OUT = "/opt/stack/meshtron/experiments/flow_topology/relabel/out"
 
 
 def point_labels(n, tris, tri_label):
@@ -50,7 +50,7 @@ def point_labels(n, tris, tri_label):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--audit", default="/work/relabel/audit.csv")
+    ap.add_argument("--audit", default="/opt/stack/meshtron/experiments/flow_topology/relabel/audit.csv")
     ap.add_argument("--val-frac", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--topo", default=None, help="keep only this topo_code from audit.csv (e.g. 49a0142abb)")

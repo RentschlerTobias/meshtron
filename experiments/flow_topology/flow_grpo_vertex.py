@@ -30,7 +30,7 @@ import time
 from multiprocessing import get_context
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -138,9 +138,9 @@ def mine_hard(model, nrm, items, thr, dev, reps=4, steps=32, bs=16):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_full.pt")
-    ap.add_argument("--vtx-ckpt", default="/work/meshtron_v2/runs/vtx_full_s0/best.pt")
-    ap.add_argument("--ptr-ckpt", default="/work/meshtron_v2/runs/ptr2_nolab/ep50.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full.pt")
+    ap.add_argument("--vtx-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/vtx_full_s0/best.pt")
+    ap.add_argument("--ptr-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/ptr2_nolab/ep50.pt")
     ap.add_argument("--out", required=True)
     ap.add_argument("--steps", type=int, default=200, help="GRPO updates")
     ap.add_argument("--batch", type=int, default=4, help="geometries per update")

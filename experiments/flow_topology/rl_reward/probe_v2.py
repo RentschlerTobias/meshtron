@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from scipy.stats import spearmanr
 
-sys.path.insert(0, "/opt/stack/meshtron"); sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron"); sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 from meshtron.data.hexa_row_tokenizer import HexaRowTokenizer
 from meshtron.training.generate import detokenize_safe
 from meshtron.training.rewards_hexarow import chamfer_symmetric

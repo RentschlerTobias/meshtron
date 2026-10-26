@@ -21,8 +21,8 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -70,11 +70,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--name", required=True)
     ap.add_argument("--split", default="val_full")
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_full.pt")
-    ap.add_argument("--post-data", default="/work/meshtron_v2/data/flow_canon_full_post.pt")
-    ap.add_argument("--vtx-ckpt", default="/work/meshtron_v2/runs/vtx_full_s0/best.pt")
-    ap.add_argument("--ptr-ckpt", default="/work/meshtron_v2/runs/ptr_s0/last.pt")
-    ap.add_argument("--var-ckpt", default="/work/meshtron_v2/runs/var_post_s0/last.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full.pt")
+    ap.add_argument("--post-data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full_post.pt")
+    ap.add_argument("--vtx-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/vtx_full_s0/best.pt")
+    ap.add_argument("--ptr-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/ptr_s0/last.pt")
+    ap.add_argument("--var-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/var_post_s0/last.pt")
     ap.add_argument("--target-h", type=float, default=0.08)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()

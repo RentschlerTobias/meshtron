@@ -17,7 +17,7 @@ index.csv: corner error, uncovered surface share, inverted cells, sj_min for pre
 The prediction is one sample per item (fixed seed), corners snapped as in infer_chain_flow.py.
 
     PYTHONPATH=<dp3d hex3d_algohex> python export_vtk_val.py --data data/flow_canon_papaya.pt \
-        --ckpt runs/flowp_flow_all_s0/last.pt --split val_new --src-root /work/datagen_papaya/runs \
+        --ckpt runs/flowp_flow_all_s0/last.pt --split val_new --src-root /opt/stack/meshtron/experiments/flow_topology/datagen_papaya/runs \
         --out vtk_val
 """
 from __future__ import annotations
@@ -28,8 +28,8 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import meshio  # noqa: E402
 import numpy as np  # noqa: E402
@@ -84,10 +84,10 @@ def main() -> int:
     ap.add_argument("--split", default="val")
     ap.add_argument("--eval-data", default=None, help="take the --split items from this file (default --data)")
     ap.add_argument("--src-root", default=RELABEL, help="directory with <name>/sample.npz")
-    ap.add_argument("--spec-from", default="/work/meshtron_v2/runs/curve_order_last.pt")
+    ap.add_argument("--spec-from", default="/opt/stack/meshtron/experiments/flow_topology/runs/curve_order_last.pt")
     ap.add_argument("--target-h", type=float, default=0.08)
-    ap.add_argument("--feature-cache", default="/work/curve/features_v2")
-    ap.add_argument("--out", default="/work/meshtron_v2/vtk_val")
+    ap.add_argument("--feature-cache", default="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
+    ap.add_argument("--out", default="/opt/stack/meshtron/experiments/flow_topology/vtk_val")
     ap.add_argument("--n", type=int, default=None, help="only the first n items")
     a = ap.parse_args()
     dev = "cuda"

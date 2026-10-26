@@ -19,11 +19,11 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 from flow_geo import FlowGeo, Topology, sample  # noqa: E402
 from train import batch_points  # noqa: E402
 
-data = torch.load("/work/meshtron_v2/data/flow_canon.pt", weights_only=False)
+data = torch.load("/opt/stack/meshtron/experiments/flow_topology/data/flow_canon.pt", weights_only=False)
 rmax = float(data["r_bounds"][1]); z0, z1 = (float(v) for v in data["z_bounds"])
 lo, hi = torch.tensor([-rmax, -rmax, z0]), torch.tensor([rmax, rmax, z1])
 va = data["val"]

@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, "/work/meshtron_v2/blade")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/blade")
 import msh_walls as MW
 
 d, part_id, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -37,7 +37,7 @@ for bi in np.flatnonzero(part == ring_p):
         Q = cur.get(k)
         if Q is not None and np.all(np.abs(np.hypot(Q[:, 0], Q[:, 1]) - rw) < 2e-3):
             ring_on[k] = Q
-P, T, L, info, rt = MW.load_regions(f"/work/datagen_full/datagen/runs/{name}/case/mesh.msh")
+P, T, L, info, rt = MW.load_regions(f"/opt/stack/meshtron/experiments/flow_topology/datagen/runs/{name}/case/mesh.msh")
 fig, ax = plt.subplots(1, 2, figsize=(16, 9))
 for a, (title, E) in zip(ax, (("source edges on the layer cut", top), ("images on the wall", bot))):
     for k, Q in E.items():

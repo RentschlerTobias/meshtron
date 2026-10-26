@@ -2,7 +2,7 @@
 # Curve head in the generator's canonical vertex/block order (fix for the order mismatch
 # found 2026-10-06), then the chain on train (best case) and val. Marker ORDER_DONE.
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/stack/domain_partition_3D/experimentell/hex3d_algohex
 (cd /opt/stack/meshtron && OMP_NUM_THREADS=4 taskset -c 0-7 $PY -m meshtron.training.train_polytron --stage curve \
    --data $M/data/curve_canon_order.pt --out $M/runs/curve_order --epochs 300 --bs 16 --lr 3e-4 --d 256 --heads 8 \

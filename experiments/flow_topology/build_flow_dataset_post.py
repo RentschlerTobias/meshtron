@@ -8,7 +8,7 @@ and adds `feature` [E] (bool, feature edge) and `post_ok`. Items whose post-proc
 edge without arc, a remaining kink > 1 deg, a vertex moved by more than --max-move) keep their original
 targets with post_ok = False, so the validation splits stay complete and comparable.
 
-    python build_flow_dataset_post.py --data data/flow_canon_full.pt --curves /work/curves_post \
+    python build_flow_dataset_post.py --data data/flow_canon_full.pt --curves /opt/stack/meshtron/experiments/flow_topology/curves_post \
         --out data/flow_canon_full_post.pt
 """
 import argparse
@@ -24,7 +24,7 @@ from scipy.spatial import cKDTree
 sys.path.insert(0, "/opt/stack/meshtron")
 from meshtron.data.polytron_blocks import ctrl_to_offsets  # noqa: E402
 
-SRC = {"tistos": "/work/datagen_full/datagen/runs", "machine": "/work/relabel/out"}
+SRC = {"tistos": "/opt/stack/meshtron/experiments/flow_topology/datagen/runs", "machine": "/opt/stack/meshtron/experiments/flow_topology/relabel/out"}
 
 
 def main():

@@ -10,7 +10,7 @@
 # container lives exactly as long as the work. Do NOT run it while the original
 # session's jobs are still alive.
 set -u
-R=/work/relabel; M=/work/meshtron_v2
+R=/opt/stack/meshtron/experiments/flow_topology/relabel; M=/opt/stack/meshtron/experiments/flow_topology
 log() { echo "[$(date +%F' '%T)] $*"; }
 
 cd $R

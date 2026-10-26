@@ -18,7 +18,7 @@ sys.path.insert(0, "/opt/stack/meshtron/scripts")
 from build_hexa_curve_dataset import build_item, load_sample  # noqa: E402
 from meshtron.data.polytron_blocks import fit_spec  # noqa: E402
 
-OUT = "/work/relabel/out"
+OUT = "/opt/stack/meshtron/experiments/flow_topology/relabel/out"
 
 
 def to_canonical(raw, it):

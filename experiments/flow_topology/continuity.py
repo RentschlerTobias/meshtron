@@ -20,7 +20,7 @@ into chains (grid lines / feature lines); per pair the kink angle of the cubic B
 shared vertex is measured for GT and (optionally) for one flow_geo sample.
 
     PYTHONPATH=<dp3d hex3d_algohex> python continuity.py --data data/flow_canon_papaya.pt \
-        --split val_new --src-root /work/datagen_papaya/runs --ckpt runs/flowp_flow_all_s0/last.pt \
+        --split val_new --src-root /opt/stack/meshtron/experiments/flow_topology/datagen_papaya/runs --ckpt runs/flowp_flow_all_s0/last.pt \
         --out continuity
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 
 import meshio  # noqa: E402
 import numpy as np  # noqa: E402
@@ -41,7 +41,7 @@ import torch  # noqa: E402
 from meshtron.data.polytron_blocks import bezier, offsets_to_ctrl  # noqa: E402
 from meshtron.geometry.geometry_features import FeatureModelV2  # noqa: E402
 
-RELABEL = "/work/relabel/out"
+RELABEL = "/opt/stack/meshtron/experiments/flow_topology/relabel/out"
 # VTK hex faces (same as meshtron.geometry.mesh_validation._HEX_FACES)
 HEX_FACES = ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7))
 KIND = {"3d": 0, "2d": 1, "feature": 2}
@@ -301,13 +301,13 @@ def load_flow(ckpt, data, dev="cuda"):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_papaya.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_papaya.pt")
     ap.add_argument("--split", default="val_new", choices=("train", "val", "val_new"))
     ap.add_argument("--src-root", default=RELABEL)
     ap.add_argument("--n", type=int, default=1000)
     ap.add_argument("--ckpt", default=None, help="flow_geo checkpoint: also measure kinks of one sample")
     ap.add_argument("--kink-deg", type=float, default=30.0, help="feature-curve turn above this = corner")
-    ap.add_argument("--feature-cache", default="/work/curve/features_v2")
+    ap.add_argument("--feature-cache", default="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)

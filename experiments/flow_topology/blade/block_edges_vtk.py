@@ -11,7 +11,7 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import meshio  # noqa: E402

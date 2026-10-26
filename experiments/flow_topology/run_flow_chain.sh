@@ -2,7 +2,7 @@
 # After run_flow.sh: end-to-end chain (snap + curved TFI) for the seed-0 checkpoint of
 # every flow_geo configuration, val split, 4 jobs x 2 cores on cores 0-7.
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 cd $M
 while [ ! -f FLOW_DONE ]; do sleep 60; done
 export OMP_NUM_THREADS=2 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/stack/domain_partition_3D/experimentell/hex3d_algohex

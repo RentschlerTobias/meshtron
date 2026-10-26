@@ -5,7 +5,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-sys.path.insert(0, "/work/meshtron_v2/blade"); sys.path.insert(0, "/opt/stack/meshtron")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/blade"); sys.path.insert(0, "/opt/stack/meshtron")
 import msh_walls as MW
 import tubeparam as TPm
 from meshtron.geometry.polytron_tfi import SurfaceProjector

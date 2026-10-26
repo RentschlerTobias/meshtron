@@ -1,5 +1,5 @@
 """Audit the new tistos_s1 samples (local snapshot of /opt/stack/papaya_datagen/runs) with the
-unchanged checks of /work/relabel/audit.py. The 'surface identical to the source sample' check is
+unchanged checks of /opt/stack/meshtron/experiments/flow_topology/relabel/audit.py. The 'surface identical to the source sample' check is
 void here (new geometries): SRC is pointed at the same directory. Writes audit.csv next to this file.
 
     python audit_papaya.py
@@ -10,7 +10,7 @@ import os
 import sys
 from collections import Counter
 
-sys.path.insert(0, "/work/relabel")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/relabel")
 import audit as A  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))

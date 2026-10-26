@@ -1,6 +1,6 @@
 """Audit the beam-relabelled samples and flag corrupted ones.
 
-For every /work/relabel/out/<name>/sample.npz:
+For every /opt/stack/meshtron/experiments/flow_topology/relabel/out/<name>/sample.npz:
   beam      all blocks cuboid, no excess faces, no inverted cells (beam.log result)
   tfi       every block a lattice, 0 inverted cells in the refill (tfi.log)
   blocks    no degenerate block, no negative block volume (6-tet split)
@@ -22,10 +22,10 @@ from collections import Counter
 import numpy as np
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_topo")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/topo_tokens")
 from meshtron.data import conditioning as C  # noqa: E402
 
-OUT = "/work/relabel/out"
+OUT = "/opt/stack/meshtron/experiments/flow_topology/relabel/out"
 SRC = "/opt/stack/meshtron/data/hex3d_algohex/batch"
 TETS = [(0, 1, 2, 6), (0, 2, 3, 6), (0, 3, 7, 6), (0, 7, 4, 6), (0, 4, 5, 6), (0, 5, 1, 6)]
 
@@ -104,7 +104,7 @@ def main():
         r["reasons"] = ";".join(r["reasons"])
     keys = ["name", "ok", "reasons", "blocks_before", "blocks", "cuboids", "excess", "inverted_beam",
             "min_sj_beam", "tfi_min_sj", "tfi_inverted", "rows", "ties", "topo_code"]
-    with open("/work/relabel/audit.csv", "w", newline="") as f:
+    with open("/opt/stack/meshtron/experiments/flow_topology/relabel/audit.csv", "w", newline="") as f:
         w = csv.DictWriter(f, keys, extrasaction="ignore"); w.writeheader(); w.writerows(rows)
     ok = [r for r in rows if r["ok"]]
     print(f"audited {len(rows)}: ok {len(ok)}, rejected {len(rows) - len(ok)}")

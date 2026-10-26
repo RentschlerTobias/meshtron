@@ -23,7 +23,7 @@ import meshio
 import numpy as np
 from scipy.spatial import cKDTree
 
-RUNS = "/work/datagen_full/datagen/runs"
+RUNS = "/opt/stack/meshtron/experiments/flow_topology/datagen/runs"
 
 
 def cube_group():

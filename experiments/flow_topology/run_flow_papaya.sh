@@ -3,7 +3,7 @@
 # val 34 old, val_new 28 new), 3 seeds in parallel; then the chain for seed 0 on both val sets and
 # the old-data seed-0 model on val_new (cores 0-7).
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 cd $M
 export OMP_NUM_THREADS=2 PYTHONDONTWRITEBYTECODE=1
 cpus=("0-1" "2-4" "5-7"); pids=()

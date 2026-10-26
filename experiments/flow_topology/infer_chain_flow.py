@@ -25,8 +25,8 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -64,9 +64,9 @@ def metrics(r, vtk):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon.pt")
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--spec-from", default="/work/meshtron_v2/runs/curve_order_last.pt",
+    ap.add_argument("--spec-from", default="/opt/stack/meshtron/experiments/flow_topology/runs/curve_order_last.pt",
                     help="checkpoint whose PolytronSpec the chain uses (same as infer_chain_v2)")
     ap.add_argument("--split", default="val", choices=("train", "val", "val_new"))
     ap.add_argument("--src-root", default=RELABEL, help="directory with <name>/sample.npz of the evaluated items")
@@ -74,7 +74,7 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=34)
     ap.add_argument("--n-best", type=int, default=4)
     ap.add_argument("--target-h", type=float, default=0.08)
-    ap.add_argument("--feature-cache", default="/work/curve/features_v2")
+    ap.add_argument("--feature-cache", default="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     ap.add_argument("--out-dir", required=True)
     a = ap.parse_args()
     dev = "cuda"

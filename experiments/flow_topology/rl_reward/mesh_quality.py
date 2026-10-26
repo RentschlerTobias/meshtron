@@ -23,7 +23,7 @@ import sys
 import meshio
 import numpy as np
 
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 from rewards_v2 import HEX_FACES, scaled_jacobian_corners  # noqa: E402
 
 

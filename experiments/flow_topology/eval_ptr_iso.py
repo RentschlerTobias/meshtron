@@ -25,7 +25,7 @@ import torch
 from networkx.algorithms.isomorphism import categorical_node_match
 from scipy.optimize import linear_sum_assignment
 
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 import flow_vertex as FVX  # noqa: E402
 import pointer_conn as PC  # noqa: E402
 from build_flow_dataset import surface_multihot  # noqa: E402
@@ -34,7 +34,7 @@ from train import batch_points  # noqa: E402
 
 HEX_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7))
 NB = ((1, 3, 4), (2, 0, 5), (3, 1, 6), (0, 2, 7), (7, 5, 0), (4, 6, 1), (5, 7, 2), (6, 4, 3))
-SRC = {"tistos": "/work/datagen_full/datagen/runs", "machine": "/work/relabel/out"}
+SRC = {"tistos": "/opt/stack/meshtron/experiments/flow_topology/datagen/runs", "machine": "/opt/stack/meshtron/experiments/flow_topology/relabel/out"}
 
 
 def complex_graph(blocks, labels=None):
@@ -65,7 +65,7 @@ def validity(P, blocks):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_full.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full.pt")
     ap.add_argument("--ptr-ckpt", required=True)
     ap.add_argument("--vtx-ckpt", required=True)
     ap.add_argument("--splits", default="val,val_new,val_full")

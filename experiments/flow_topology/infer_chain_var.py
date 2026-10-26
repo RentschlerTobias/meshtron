@@ -8,7 +8,7 @@ Per item, same chain as infer_chain_flow.py (snap, curved TFI, mesh metrics):
   gt         GT corners + curves
 
     PYTHONPATH=<dp3d hex3d_algohex> python infer_chain_var.py --var-ckpt runs/var_s0/last.pt --split val_new \
-        --src-root /work/datagen_papaya/runs --out-dir chain/var_m1_valnew
+        --src-root /opt/stack/meshtron/experiments/flow_topology/datagen_papaya/runs --out-dir chain/var_m1_valnew
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -40,17 +40,17 @@ VARIANTS = ("flowp", "var", "var_gtc", "gt")
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_papaya.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_papaya.pt")
     ap.add_argument("--var-ckpt", required=True)
-    ap.add_argument("--flow-ckpt", default="/work/meshtron_v2/runs/flowp_flow_all_s0/last.pt")
-    ap.add_argument("--flow-data", default="/work/meshtron_v2/data/flow_canon_papaya.pt",
+    ap.add_argument("--flow-ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/flowp_flow_all_s0/last.pt")
+    ap.add_argument("--flow-data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_papaya.pt",
                     help="the data the fixed-topology model was trained on (its template statistics)")
-    ap.add_argument("--spec-from", default="/work/meshtron_v2/runs/curve_order_last.pt")
+    ap.add_argument("--spec-from", default="/opt/stack/meshtron/experiments/flow_topology/runs/curve_order_last.pt")
     ap.add_argument("--split", default="val")
     ap.add_argument("--src-root", default=RELABEL)
     ap.add_argument("--n", type=int, default=1000)
     ap.add_argument("--target-h", type=float, default=0.08)
-    ap.add_argument("--feature-cache", default="/work/curve/features_v2")
+    ap.add_argument("--feature-cache", default="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     ap.add_argument("--out-dir", required=True)
     a = ap.parse_args()
     dev = "cuda"
@@ -63,7 +63,7 @@ def main() -> int:
     gen = torch.Generator(device=dev); gen.manual_seed(1234)
     rows = []
     for it in data[a.split][:a.n]:
-        root = {"tistos": "/work/datagen_full/datagen/runs", "machine": RELABEL}.get(it["name"].split("_")[0], a.src_root) \
+        root = {"tistos": "/opt/stack/meshtron/experiments/flow_topology/datagen/runs", "machine": RELABEL}.get(it["name"].split("_")[0], a.src_root) \
             if a.src_root == "auto" else a.src_root
         npz = os.path.join(root, it["name"], "sample.npz")
         with np.load(npz, allow_pickle=True) as zf:

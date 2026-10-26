@@ -2,7 +2,7 @@
 # Curve head on the relabelled data, after run_all2.sh has built data/v2_cart.pt
 # (signalled by its "train vertex_M" log line). Cores 8-11 (relabel lanes done by then).
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/stack/domain_partition_3D/experimentell/hex3d_algohex
 log() { echo "[$(date +%F' '%T)] $*"; }
 log "waiting for the v2 dataset"

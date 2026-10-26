@@ -26,7 +26,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import meshio  # noqa: E402
@@ -488,7 +488,7 @@ def main():
     ap.add_argument("--name", default="tistos_s1_0131")
     ap.add_argument("--out", required=True)
     ap.add_argument("--sample", default=None, help="sample.npz (default: datagen run of --name)")
-    ap.add_argument("--post", default=None, help="post-processed curves npz (default: /work/curves_post)")
+    ap.add_argument("--post", default=None, help="post-processed curves npz (default: /opt/stack/meshtron/experiments/flow_topology/curves_post)")
     ap.add_argument("--msh", default=None, help="dtOO case/mesh.msh (default: datagen run of --name)")
     ap.add_argument("--target-h", type=float, default=0.05)
     ap.add_argument("--layers", type=int, default=8)

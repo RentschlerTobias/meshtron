@@ -21,7 +21,7 @@ from scipy.spatial import cKDTree
 sys.path.insert(0, "/opt/stack/domain_partition_3D/experimentell/hex3d_algohex")
 import ovm_io  # noqa: E402
 
-RUNS = "/work/datagen_full/datagen/runs"
+RUNS = "/opt/stack/meshtron/experiments/flow_topology/datagen/runs"
 # VTK hex corner order: parallel edge groups per local axis
 AXIS_EDGES = (((0, 1), (3, 2), (4, 5), (7, 6)),
               ((0, 3), (1, 2), (4, 7), (5, 6)),

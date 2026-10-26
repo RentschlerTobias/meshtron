@@ -15,7 +15,7 @@ The result is evaluated with the real fill (refill_polytron + surface projection
 metrics as infer_chain_flow.py, plus the kink at every continuity pair measured on the curves that
 go into the fill.
 
-    PYTHONPATH=<dp3d hex3d_algohex> python curve_opt.py --split val_new --src-root /work/datagen_papaya/runs \
+    PYTHONPATH=<dp3d hex3d_algohex> python curve_opt.py --split val_new --src-root /opt/stack/meshtron/experiments/flow_topology/datagen_papaya/runs \
         --ckpt runs/flowp_flow_all_s0/last.pt --out-dir chain/curve_opt_valnew
 """
 from __future__ import annotations
@@ -27,8 +27,8 @@ import sys
 import time
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
-sys.path.insert(0, "/work/rl_reward")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology/rl_reward")
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -453,17 +453,17 @@ def pair_kinks(cur, E, det, frac=0.01):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", default="/work/meshtron_v2/data/flow_canon_papaya.pt")
+    ap.add_argument("--data", default="/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_papaya.pt")
     ap.add_argument("--split", default="val_new", choices=("train", "val", "val_new"))
     ap.add_argument("--src-root", default=C.RELABEL)
-    ap.add_argument("--ckpt", default="/work/meshtron_v2/runs/flowp_flow_all_s0/last.pt")
+    ap.add_argument("--ckpt", default="/opt/stack/meshtron/experiments/flow_topology/runs/flowp_flow_all_s0/last.pt")
     ap.add_argument("--n", type=int, default=1000)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--iters", type=int, default=300)
     ap.add_argument("--target-h", type=float, default=0.08)
     ap.add_argument("--weights", default="{}", help="JSON overrides for the loss weights")
     ap.add_argument("--variants", default=",".join(VARIANTS))
-    ap.add_argument("--feature-cache", default="/work/curve/features_v2")
+    ap.add_argument("--feature-cache", default="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     ap.add_argument("--out-dir", required=True)
     a = ap.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)

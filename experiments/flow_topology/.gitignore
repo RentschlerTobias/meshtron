@@ -1,0 +1,18 @@
+# Data of the former working directory /work on mars (copied by tools/archive_sandbox.sh); lives next to the code
+# on the NFS, never in Git.
+/data/
+/runs/
+/chain/
+/blade/out/
+/blade/keep_bl/
+/viz/
+/vtk_val/
+/continuity/
+/logs/
+/curves_post/
+/minimality/
+/relabel/
+/datagen/
+/literature/
+/cache/
+/datagen_papaya/

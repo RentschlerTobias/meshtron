@@ -18,7 +18,7 @@ import os
 import sys
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 sys.path.insert(0, "/opt/stack/domain_partition_3D/experimentell/hex3d_algohex")
 
 import numpy as np  # noqa: E402
@@ -30,7 +30,7 @@ import curve_opt as CO  # noqa: E402
 import curve_postprocess as cp  # noqa: E402
 from frame_field_tet import TetFrameField  # noqa: E402
 
-RUNS = "/work/datagen_full/datagen/runs"
+RUNS = "/opt/stack/meshtron/experiments/flow_topology/datagen/runs"
 
 
 def bez_t(P0, B1, B2, P1, t):
@@ -87,7 +87,7 @@ def main():
     s = cp.__dict__["np"].load(f"{R}/sample.npz")
     import export_sample as es
     smp = es.load(f"{R}/sample.npz")
-    post = np.load(f"/work/curves_post/{a.name}_curves.npz")
+    post = np.load(f"/opt/stack/meshtron/experiments/flow_topology/curves_post/{a.name}_curves.npz")
     raw = {k: smp[k] for k in ("surface_points", "surface_tris", "surface_tri_label")}
     ff = TetFrameField(f"{R}/tet.vtk", iters=200, verbose=False)
     V0, B = smp["vertices"], smp["blocks"]

@@ -11,7 +11,7 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, "/opt/stack/meshtron")
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 
 import meshio  # noqa: E402
 import numpy as np  # noqa: E402
@@ -87,9 +87,9 @@ def main():
     out["cloud"] = {"pts": r(pc.points[sel]), "label": pc.point_data["label"][sel].astype(int).tolist()}
 
     # stage-1 trajectory (same seed / order of random draws as viz_pipeline.py)
-    data = torch.load("/work/meshtron_v2/data/flow_canon_full.pt", weights_only=False)
+    data = torch.load("/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full.pt", weights_only=False)
     it = next(x for x in data[a.split] if x["name"] == a.name)
-    vm, vn, _ = FVX.load("/work/meshtron_v2/runs/vtx_full_s0/best.pt", data)
+    vm, vn, _ = FVX.load("/opt/stack/meshtron/experiments/flow_topology/runs/vtx_full_s0/best.pt", data)
     gen = torch.Generator(device=dev); gen.manual_seed(1234)
     pts, pmask = batch_points([it], dev)
     traj = []
@@ -118,12 +118,12 @@ def main():
     out["gt_blocks"] = {"pts": r(g.points), "hex": np.concatenate([c.data for c in g.cells if c.type == "hexahedron"]).tolist()}
 
     # stage-3 trajectory: corners + curves while the flow runs
-    pdata = torch.load("/work/meshtron_v2/data/flow_canon_full_post.pt", weights_only=False)
-    var, vnrm, vargs = FV.load("/work/meshtron_v2/runs/var_post_s0/last.pt", pdata)
+    pdata = torch.load("/opt/stack/meshtron/experiments/flow_topology/data/flow_canon_full_post.pt", weights_only=False)
+    var, vnrm, vargs = FV.load("/opt/stack/meshtron/experiments/flow_topology/runs/var_post_s0/last.pt", pdata)
     Vb = np.asarray(b.points, float)
     E = np.array(sorted({tuple(sorted((int(h[i]), int(h[j])))) for h in H for i, j in HEX_EDGES}), np.int64)
     from build_flow_dataset import surface_multihot
-    raw = np.load(f"/work/datagen_full/datagen/runs/{a.name}/sample.npz")
+    raw = np.load(f"/opt/stack/meshtron/experiments/flow_topology/datagen/runs/{a.name}/sample.npz")
     tol = 6e-3 * np.linalg.norm(np.ptp(np.asarray(raw["surface_points"]), 0))
     item = {"verts": torch.tensor(Vb, dtype=torch.float32), "conn": torch.tensor(H), "edges": torch.tensor(E),
             "vlab": torch.tensor(surface_multihot(Vb, raw, tol)),

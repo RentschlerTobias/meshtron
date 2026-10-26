@@ -11,7 +11,7 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, "/work/meshtron_v2")
+sys.path.insert(0, "/opt/stack/meshtron/experiments/flow_topology")
 import infer_chain_v2 as C  # noqa: E402
 from infer_chain_v2 import T, load_raw, snap_all  # noqa: E402
 
@@ -25,7 +25,7 @@ rng = np.random.default_rng(0)
 res = {}
 for it in data["train"][:10]:
     raw = load_raw(it["name"])
-    fm = C.FeatureModelV2(os.path.join(C.RELABEL, it["name"], "sample.npz"), cache_dir="/work/curve/features_v2")
+    fm = C.FeatureModelV2(os.path.join(C.RELABEL, it["name"], "sample.npz"), cache_dir="/opt/stack/meshtron/experiments/flow_topology/cache/features_v2")
     lab = C.point_labels(len(raw["surface_points"]), raw["surface_tris"], raw["surface_tri_label"])
     pc = torch.as_tensor(np.array(C.poly_cloud(raw["surface_points"], lab, 2048, spec, np.random.default_rng(0)))[None],
                          dtype=torch.float32, device=dev)

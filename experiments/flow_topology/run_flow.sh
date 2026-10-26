@@ -2,7 +2,7 @@
 # Flow-matching geometry model (flow_geo.py): flow vs regress x verts vs all, 3 seeds,
 # 303 train / 34 val (data/flow_canon.pt). 3 runs at a time on the GPU, CPU cores 0-7.
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 cd $M
 export OMP_NUM_THREADS=2 PYTHONDONTWRITEBYTECODE=1
 jobs_list=()

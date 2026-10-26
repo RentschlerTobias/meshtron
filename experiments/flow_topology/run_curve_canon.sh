@@ -1,7 +1,7 @@
 #!/bin/bash
 # Curve head on the canonical-topology set, full 300 epochs (overfit allowed; use _last.pt).
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/stack/domain_partition_3D/experimentell/hex3d_algohex
 (cd /opt/stack/meshtron && OMP_NUM_THREADS=4 taskset -c 8-11 $PY -m meshtron.training.train_polytron --stage curve \
    --data $M/data/curve_canon.pt --out $M/runs/curve_canon --epochs 300 --bs 16 --lr 3e-4 --d 256 --heads 8 \

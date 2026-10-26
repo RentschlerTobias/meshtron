@@ -38,8 +38,8 @@ from build_flow_dataset import surface_multihot  # noqa: E402
 from flow_geo_var import Norm  # noqa: E402
 from train import batch_points, pad  # noqa: E402
 
-SRC = {"tistos": "/work/datagen_full/datagen/runs", "machine": "/work/relabel/out"}
-FEAT_CACHE = "/work/curve/features_v2"
+SRC = {"tistos": "/opt/stack/meshtron/experiments/flow_topology/datagen/runs", "machine": "/opt/stack/meshtron/experiments/flow_topology/relabel/out"}
+FEAT_CACHE = "/opt/stack/meshtron/experiments/flow_topology/cache/features_v2"
 
 
 def npz_of(name):

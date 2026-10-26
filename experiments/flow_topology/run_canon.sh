@@ -2,7 +2,7 @@
 # Canonical-topology runs (2026-10-06): overfit "best case" models (last epoch, also
 # evaluated on train) + learning curve on the vertex task. Marker CANON_DONE.
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 export PYTHONDONTWRITEBYTECODE=1
 log() { echo "[$(date +%F' '%T)] $*"; }
 run() {  # name task d layers [extra]

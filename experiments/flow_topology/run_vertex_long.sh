@@ -1,7 +1,7 @@
 #!/bin/bash
 # Best case for stage 1: vertex model trained to convergence on train, then the chain on train.
 set -u
-M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/stack/domain_partition_3D/experimentell/hex3d_algohex
 (cd $M && OMP_NUM_THREADS=4 taskset -c 0-7 $PY train.py --task vertex --data data/v2_canon.pt --out runs/of_vertex_S_long \
    --d 128 --layers 2 --heads 4 --n-latent 32 --epochs 1500 --eval-every 50 --patience 1000 --bs 16 \

@@ -1,4 +1,4 @@
-"""Train + evaluate the v2 generators on /work/meshtron_v2/data/<set>.pt.
+"""Train + evaluate the v2 generators on /opt/stack/meshtron/experiments/flow_topology/data/<set>.pt.
 
 Tasks:
   hexarow   HexaRow cart tokens (topo order), every corner emitted per block row

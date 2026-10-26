@@ -1,8 +1,8 @@
 #!/bin/bash
 # Overnight chain (2026-10-05): relabel done -> TFI backfill -> audit -> dataset -> training grid -> summary.
-# Waits on the lane done-files of /work/relabel (never on a process pattern).
+# Waits on the lane done-files of /opt/stack/meshtron/experiments/flow_topology/relabel (never on a process pattern).
 set -u
-R=/work/relabel; M=/work/meshtron_v2; PY=/opt/venv-sci/bin/python
+R=/opt/stack/meshtron/experiments/flow_topology/relabel; M=/opt/stack/meshtron/experiments/flow_topology; PY=/opt/venv-sci/bin/python
 export PYTHONDONTWRITEBYTECODE=1
 log() { echo "[$(date +%F' '%T)] $*"; }
 
@@ -40,9 +40,9 @@ log "summary"
 $PY - <<'EOF'
 import glob, json
 rows = []
-for f in sorted(glob.glob('/work/meshtron_v2/runs/*/result.json')):
+for f in sorted(glob.glob('/opt/stack/meshtron/experiments/flow_topology/runs/*/result.json')):
     s = json.load(open(f))["summary"]; s["run"] = f.split('/')[-2]; rows.append(s)
-with open('/work/meshtron_v2/SUMMARY.md', 'w') as fh:
+with open('/opt/stack/meshtron/experiments/flow_topology/SUMMARY.md', 'w') as fh:
     fh.write("# v2 training grid (topo order, all labelled points, no block count)\n\n")
     fh.write("| run | params M | best epoch | val loss | val n | valid | struct ok | corner mean (median) | corner max (median) | exact conn |\n|---|---|---|---|---|---|---|---|---|---|\n")
     for s in rows:
@@ -50,7 +50,7 @@ with open('/work/meshtron_v2/SUMMARY.md', 'w') as fh:
                  f"{s.get('valid','')} | {s.get('struct_ok','')} | {s.get('corner_mean_median') or ''} | "
                  f"{s.get('corner_max_median') or ''} | {s.get('exact','')} |\n")
     fh.write("\ncorner values: distance generated vs GT corner in canonical order, dataset units x 1000.\n")
-print(open('/work/meshtron_v2/SUMMARY.md').read())
+print(open('/opt/stack/meshtron/experiments/flow_topology/SUMMARY.md').read())
 EOF
 log "ALL DONE"
 touch $M/ALL_DONE
